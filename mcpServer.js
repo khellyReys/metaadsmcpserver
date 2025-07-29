@@ -99,9 +99,6 @@ async function run() {
         credentials: true,
       })
     );
-    app.get("/healthz", (_req, res) => {
-      res.status(200).send("OK");
-    });
 
     // SSE “connect” endpoint
     app.get("/sse", async (_req, res) => {
