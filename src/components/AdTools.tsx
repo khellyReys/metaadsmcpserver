@@ -12,7 +12,6 @@ interface McpTool {
 
 interface AdToolsProps {
   businessId: string;
-  mcpServerLink: string;
   secret: string;
 }
 
@@ -21,35 +20,32 @@ interface Endpoints {
   http: string;
 }
 
-// Build both SSE and HTTP RPC endpoints (handshake uses SSE only)
+// read from Vite env (use REACT_APP_MCP_URL if CRA)
+const DEFAULT_MCP_URL = import.meta.env.VITE_MCP_URL || "http://localhost:5173";
+
+/** Build both SSE and HTTP RPC endpoints (handshake uses SSE only) */
 const makeEndpoints = (base: string, token: string): Endpoints => ({
   sse: `${base}/sse?token=${token}`,
   http: `${base}/http?token=${token}`,
 });
 
-const AdTools: React.FC<AdToolsProps> = ({
-  businessId,
-  mcpServerLink,
-  secret,
-}) => {
+const AdTools: React.FC<AdToolsProps> = ({ businessId, secret }) => {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [tools, setTools] = useState<McpTool[]>([]);
 
-  // sessionPath holds "/messages?sessionId=…" once handshake completes
+  // Once handshake completes, we get back a sessionPath like "/messages?sessionId=…"
   const [sessionPath, setSessionPath] = useState<string>();
   const [connecting, setConnecting] = useState(true);
 
-  // Load and dedupe tools on mount
+  // 1) Load & dedupe tools from your local `tools` folder
   useEffect(() => {
     async function loadTools() {
       const loaded: McpTool[] = [];
       const seen = new Set<string>();
       for (const path of toolPaths) {
         try {
-          const mod = await import(
-            `../../tools/${path}`
-          );
+          const mod = await import(`../../tools/${path}`);
           const apiTool = mod.apiTool;
           const def = apiTool?.definition?.function;
           if (def?.name && def?.description && !seen.has(def.name)) {
@@ -58,12 +54,11 @@ const AdTools: React.FC<AdToolsProps> = ({
               id: `${def.name}:${path}`,
               name: def.name,
               description: def.description,
-              category:
-                apiTool.definition.function.category ?? "Uncategorized",
+              category: apiTool.definition.function.category ?? "Uncategorized",
             });
           }
-        } catch (err) {
-          console.error("Error loading tool:", path, err);
+        } catch {
+          // skip invalid modules
         }
       }
       setTools(loaded);
@@ -71,46 +66,37 @@ const AdTools: React.FC<AdToolsProps> = ({
     loadTools();
   }, []);
 
-  // Filter categories
+  // 2) Compute category list
   const categories = useMemo(() => {
     const cats = Array.from(new Set(tools.map((t) => t.category))).sort();
     return ["All", ...cats];
   }, [tools]);
 
-  // Filter tools by search & category
+  // 3) Filter tools by search + category
   const filtered = useMemo(
     () =>
       tools.filter((tool) => {
-        const matchesSearch = tool.name
-          .toLowerCase()
-          .includes(searchTerm.toLowerCase());
-        const matchesCat =
-          selectedCategory === "All" || tool.category === selectedCategory;
+        const matchesSearch = tool.name.toLowerCase().includes(searchTerm.toLowerCase());
+        const matchesCat = selectedCategory === "All" || tool.category === selectedCategory;
         return matchesSearch && matchesCat;
       }),
     [tools, searchTerm, selectedCategory]
   );
 
-  // Compute endpoints and base URL
+  // 4) Build endpoints from DEFAULT_MCP_URL + base64(businessId:secret)
   const { sse, http } = useMemo(() => {
     const token = btoa(`${businessId}:${secret}`);
-    const base = mcpServerLink || "http://localhost:5173";
-    return makeEndpoints(base, token);
-  }, [businessId, secret, mcpServerLink]);
+    return makeEndpoints(DEFAULT_MCP_URL, token);
+  }, [businessId, secret]);
 
-  // Clipboard helper
-  const copyToClipboard = (text: string) => () =>
-    navigator.clipboard.writeText(text);
-
-  // Step: handshake to get sessionPath via SSE 'endpoint' event
+  // 5) Handshake: open SSE to get the real sessionPath
   useEffect(() => {
     setConnecting(true);
     setSessionPath(undefined);
 
-    console.log("▶️  Opening SSE:", sse);
     const es = new EventSource(sse);
     es.addEventListener("endpoint", (e: MessageEvent) => {
-      setSessionPath(e.data); // e.g. "/messages?sessionId=abc123"
+      setSessionPath(e.data);
       setConnecting(false);
       es.close();
     });
@@ -124,53 +110,36 @@ const AdTools: React.FC<AdToolsProps> = ({
     };
   }, [sse]);
 
-  // Derive base URL for rendering full paths
-  const base = mcpServerLink || "http://localhost:5173";
+  // helper to copy text
+  const copyToClipboard = (txt: string) => () => navigator.clipboard.writeText(txt);
 
   return (
     <div className="min-h-screen bg-gray-50">
       {/* HEADER */}
       <header className="bg-white border-b border-gray-200">
         <div className="max-w-7xl mx-auto px-4 py-4 flex flex-col md:flex-row md:items-center md:justify-between space-y-4 md:space-y-0">
+          {/* Title */}
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">
-              MCP Tools Library
-            </h1>
+            <h1 className="text-2xl font-bold text-gray-900">MCP Tools Library</h1>
             <p className="text-gray-600 text-sm">Business ID: {businessId}</p>
           </div>
 
           {/* Connection URLs */}
-          <div className="w-full md:w-auto">
+          <div className="w-full md:w-3/4">
             {connecting ? (
-              <p className="text-gray-500 text-sm">
-                Connecting to MCP server…
-              </p>
+              <p className="text-gray-500 text-sm">Connecting to MCP server…</p>
             ) : sessionPath ? (
               <div className="flex flex-col md:flex-row md:space-x-4 space-y-4 md:space-y-0">
-                {/* SSE Handshake URL */}
-                <div className="flex-1 flex">
+                {/* SSE URL */}
+                <div className="flex w-full md:w-2/3">
                   <input
                     readOnly
                     value={sse}
-                    className="flex-1 border rounded-l-md px-3 py-2 font-mono text-sm"
+                    className="flex-1 w-full border rounded-l-md px-3 py-2 font-mono text-sm"
                   />
                   <button
                     onClick={copyToClipboard(sse)}
                     className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-r-md"
-                  >
-                    <Copy className="w-4 h-4" />
-                  </button>
-                </div>
-                {/* HTTP POST URL with sessionId */}
-                <div className="flex-1 flex">
-                  <input
-                    readOnly
-                    value={`${base}${sessionPath}`}
-                    className="flex-1 border rounded-l-md px-3 py-2 font-mono text-sm"
-                  />
-                  <button
-                    onClick={copyToClipboard(`${base}${sessionPath}`)}
-                    className="bg-green-600 hover:bg-green-700 text-white px-3 py-2 rounded-r-md"
                   >
                     <Copy className="w-4 h-4" />
                   </button>
@@ -189,6 +158,7 @@ const AdTools: React.FC<AdToolsProps> = ({
 
       {/* BODY */}
       <div className="max-w-7xl mx-auto px-4 py-8 grid grid-cols-1 lg:grid-cols-5 gap-8">
+        {/* Sidebar: categories */}
         <aside className="lg:col-span-1">
           <nav className="space-y-2">
             {categories.map((cat) => (
@@ -207,7 +177,9 @@ const AdTools: React.FC<AdToolsProps> = ({
           </nav>
         </aside>
 
+        {/* Tools Grid */}
         <section className="lg:col-span-4 space-y-6">
+          {/* Search */}
           <div className="flex items-center border rounded-lg overflow-hidden">
             <SearchIcon className="w-5 h-5 text-gray-400 ml-3" />
             <input
@@ -219,6 +191,7 @@ const AdTools: React.FC<AdToolsProps> = ({
             />
           </div>
 
+          {/* Tool Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
             {filtered.length > 0 ? (
               filtered.map((tool) => (
@@ -226,21 +199,15 @@ const AdTools: React.FC<AdToolsProps> = ({
                   key={tool.id}
                   className="bg-white border border-gray-200 rounded-lg p-6 shadow-sm hover:shadow-md transition"
                 >
-                  <h3 className="text-lg font-semibold text-gray-900 mb-2">
-                    {tool.name}
-                  </h3>
-                  <p className="text-sm text-gray-600 mb-4">
-                    {tool.description}
-                  </p>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-2">{tool.name}</h3>
+                  <p className="text-sm text-gray-600 mb-4">{tool.description}</p>
                   <span className="inline-block text-xs font-medium text-gray-500 bg-gray-100 px-2 py-1 rounded-full">
                     {tool.category}
                   </span>
                 </div>
               ))
             ) : (
-              <p className="text-gray-500 col-span-full text-center">
-                No tools found.
-              </p>
+              <p className="text-gray-500 col-span-full text-center">No tools found.</p>
             )}
           </div>
         </section>
