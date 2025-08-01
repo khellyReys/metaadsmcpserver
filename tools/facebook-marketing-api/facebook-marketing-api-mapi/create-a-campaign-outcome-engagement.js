@@ -31,8 +31,7 @@ const executeFunction = async ({ account_id, name, objective = 'OUTCOME_ENGAGEME
     // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
-      console.error('Facebook API error response:', errorData); // log full object
-      throw new Error(`Facebook API error: ${JSON.stringify(errorData)}`);
+      throw new Error(errorData);
     }
 
     // Parse and return the response data
