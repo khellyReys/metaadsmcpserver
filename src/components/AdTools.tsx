@@ -21,12 +21,12 @@ interface Endpoints {
 }
 
 // read from Vite env (use REACT_APP_MCP_URL if CRA)
-const DEFAULT_MCP_URL = import.meta.env.VITE_MCP_URL || "http://localhost:5173";
+const DEFAULT_MCP_URL = import.meta.env.VITE_MCP_URL || "http://localhost:3001";
 
 /** Build both SSE and HTTP RPC endpoints (handshake uses SSE only) */
 const makeEndpoints = (base: string, token: string): Endpoints => ({
   sse: `${base}/sse?token=${token}`,
-  http: `${base}/http?token=${token}`,
+  http: `${base}` // actual POST URL will append sessionPath
 });
 
 const AdTools: React.FC<AdToolsProps> = ({ businessId, secret }) => {
@@ -37,6 +37,7 @@ const AdTools: React.FC<AdToolsProps> = ({ businessId, secret }) => {
   // Once handshake completes, we get back a sessionPath like "/messages?sessionId=…"
   const [sessionPath, setSessionPath] = useState<string>();
   const [connecting, setConnecting] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   // 1) Load & dedupe tools from your local `tools` folder
   useEffect(() => {
@@ -93,15 +94,18 @@ const AdTools: React.FC<AdToolsProps> = ({ businessId, secret }) => {
   useEffect(() => {
     setConnecting(true);
     setSessionPath(undefined);
+    setError(null);
 
     const es = new EventSource(sse);
-    es.addEventListener("endpoint", (e: MessageEvent) => {
-      setSessionPath(e.data);
+    // Listen for 'session' event containing sessionPath
+    es.addEventListener("session", (e: MessageEvent) => {
+      setSessionPath(e.data); // e.data is like "/messages?sessionId=..."
       setConnecting(false);
       es.close();
     });
     es.onerror = () => {
       console.error("SSE handshake failed");
+      setError("Failed to connect to SSE endpoint.");
       setConnecting(false);
       es.close();
     };
@@ -112,6 +116,31 @@ const AdTools: React.FC<AdToolsProps> = ({ businessId, secret }) => {
 
   // helper to copy text
   const copyToClipboard = (txt: string) => () => navigator.clipboard.writeText(txt);
+
+  // Function to invoke a tool via POST /messages?sessionId=...
+  const callTool = async (toolName: string, args: Record<string, any>) => {
+    if (!sessionPath) {
+      console.warn("Session not ready");
+      return;
+    }
+    try {
+      const url = `${DEFAULT_MCP_URL}${sessionPath}`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: Date.now(),
+          method: toolName,
+          params: { arguments: args },
+        }),
+      });
+      const data = await res.json();
+      console.log("Tool response:", data);
+    } catch (err) {
+      console.error("Error calling tool", err);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -125,34 +154,47 @@ const AdTools: React.FC<AdToolsProps> = ({ businessId, secret }) => {
           </div>
 
           {/* Connection URLs */}
-          <div className="w-full md:w-3/4">
-            {connecting ? (
-              <p className="text-gray-500 text-sm">Connecting to MCP server…</p>
-            ) : sessionPath ? (
-              <div className="flex flex-col md:flex-row md:space-x-4 space-y-4 md:space-y-0">
-                {/* SSE URL */}
-                <div className="flex w-full md:w-2/3">
-                  <input
-                    readOnly
-                    value={sse}
-                    className="flex-1 w-full border rounded-l-md px-3 py-2 font-mono text-sm"
-                  />
-                  <button
-                    onClick={copyToClipboard(sse)}
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-r-md"
-                  >
-                    <Copy className="w-4 h-4" />
-                  </button>
+          <div className="w-full md:w-3/4 space-y-2">
+            {connecting && <p className="text-gray-500 text-sm">Connecting to MCP server…</p>}
+            {error && <p className="text-red-500 text-sm">{error}</p>}
+            {!connecting && sessionPath && (
+              <>
+                <div className="flex flex-col md:flex-row md:space-x-4 space-y-2 md:space-y-0">
+                  {/* SSE URL */}
+                  <div className="flex w-full md:w-2/3">
+                    <input
+                      readOnly
+                      value={sse}
+                      className="flex-1 border rounded-l-md px-3 py-2 font-mono text-sm"
+                    />
+                    <button
+                      onClick={copyToClipboard(sse)}
+                      className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-r-md"
+                    >
+                      <Copy className="w-4 h-4" />
+                    </button>
+                  </div>
+                  {/* RPC POST URL */}
+                  <div className="flex w-full md:w-2/3">
+                    <input
+                      readOnly
+                      value={`${DEFAULT_MCP_URL}${sessionPath}`}
+                      className="flex-1 border rounded-l-md px-3 py-2 font-mono text-sm"
+                    />
+                    <button
+                      onClick={copyToClipboard(`${DEFAULT_MCP_URL}${sessionPath}`)}
+                      className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-r-md"
+                    >
+                      <Copy className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ) : (
-              <p className="text-red-500 text-sm">Failed to connect.</p>
+                <p className="text-xs text-gray-500">
+                  Use the SSE URL to subscribe and the RPC URL to POST tool calls.
+                </p>
+              </>
             )}
           </div>
-
-          <p className="text-xs text-gray-500">
-            Copy either the SSE or HTTP RPC endpoint to connect your MCP client.
-          </p>
         </div>
       </header>
 
@@ -204,6 +246,12 @@ const AdTools: React.FC<AdToolsProps> = ({ businessId, secret }) => {
                   <span className="inline-block text-xs font-medium text-gray-500 bg-gray-100 px-2 py-1 rounded-full">
                     {tool.category}
                   </span>
+                  <button
+                    onClick={() => callTool(tool.name, { account_id: businessId })}
+                    className="mt-4 bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700 text-sm"
+                  >
+                    Run
+                  </button>
                 </div>
               ))
             ) : (

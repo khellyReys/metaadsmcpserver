@@ -33,7 +33,7 @@ function App() {
       <AdTools
         businessId={selectedBusinessId}
         secret={mcpSecret}
-        mcpServerLink="http://localhost:3001"  // ← Your MCP server URL
+        mcpServerLink="https://metaadsmcpserver.onrender.com"  // ← Your MCP server URL
       />
     );
   }
