@@ -98,7 +98,6 @@ async function run() {
     app.use(
       cors({
         origin: (incomingOrigin, callback) => {
-          // allow requests with no origin (e.g. mobile apps, curl) or matching our list
           if (!incomingOrigin || allowedOrigins.includes(incomingOrigin)) {
             callback(null, true);
           } else {
@@ -113,6 +112,10 @@ async function run() {
 
     // SSE “connect” endpoint
     app.get("/sse", async (_req, res) => {
+      // Disable proxy buffering so the SDK’s headers go out immediately
+      res.setHeader("X-Accel-Buffering", "no");
+
+      // Let the MCP SDK handle writing the correct SSE headers itself
       const server = new Server(
         { name: SERVER_NAME, version: "0.1.0" },
         { capabilities: { tools: {} } }
@@ -134,7 +137,7 @@ async function run() {
       await server.connect(transport);
     });
 
-    // Companion POST endpoint for JSON‑RPC calls tied to an SSE session
+    // Companion POST endpoint for JSON-RPC calls tied to an SSE session
     app.post("/messages", async (req, res) => {
       const sessionId = req.query.sessionId;
       const transport = transports[sessionId];

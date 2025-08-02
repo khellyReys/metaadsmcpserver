@@ -54,7 +54,7 @@ const apiTool = {
   definition: {
     type: 'function',
     function: {
-      name: 'create_campaign',
+      name: 'create_campaign_outcome_awareness',
       description: 'Create a campaign in the Facebook Marketing API.',
       parameters: {
         type: 'object',

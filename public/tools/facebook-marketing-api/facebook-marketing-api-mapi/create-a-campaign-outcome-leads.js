@@ -12,7 +12,7 @@
  * @returns {Promise<Object>} - The result of the campaign creation.
  */
 const executeFunction = async ({ account_id, token, name = "PostManCampaignLeads", objective = "OUTCOME_LEADS", status = "PAUSED", bid_strategy = "LOWEST_COST_WITH_BID_CAP", daily_budget = 100.00 }) => {
-  const baseUrl = ''; // will be provided by the user
+  const baseUrl = ''; // will be provided by the users
   try {
     // Construct the URL for the campaign creation
     const url = new URL(`${baseUrl}/act_${account_id}/campaigns`);
