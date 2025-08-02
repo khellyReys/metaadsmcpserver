@@ -90,10 +90,21 @@ async function run() {
     const transports = {};
     const servers = {};
 
-    // CORS: allow your React app (http://localhost:5173) to connect
+    const allowedOrigins = [
+      "http://localhost:5173",                        // local Vite
+      "https://metaadsmcpserver-1.onrender.com"       // your deployed React app
+    ];
+    
     app.use(
       cors({
-        origin: "http://localhost:5173",
+        origin: (incomingOrigin, callback) => {
+          // allow requests with no origin (e.g. mobile apps, curl) or matching our list
+          if (!incomingOrigin || allowedOrigins.includes(incomingOrigin)) {
+            callback(null, true);
+          } else {
+            callback(new Error(`Origin ${incomingOrigin} not allowed by CORS`));
+          }
+        },
         methods: ["GET", "POST"],
         allowedHeaders: ["Content-Type"],
         credentials: true,
