@@ -30,7 +30,9 @@ const executeFunction = async ({ account_id, ps_adset_id_traffic, adcreatives2 }
     // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
+      console.log(JSON.stringify(errorData));
       throw new Error(errorData);
+      
     }
 
     // Parse and return the response data
