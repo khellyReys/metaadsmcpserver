@@ -1,3 +1,3 @@
-declare module "../../tools/paths.js" {
+declare module "../public/tools/paths.js" {
   export const toolPaths: string[];
-} 
+}

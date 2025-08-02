@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { Copy, Search as SearchIcon } from "lucide-react";
 // @ts-ignore
-import { toolPaths } from "../../tools/paths.js";
+import { toolPaths } from '../../public/tools/paths.js';
 
 interface McpTool {
   id: string;
