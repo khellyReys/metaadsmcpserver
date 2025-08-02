@@ -32,6 +32,7 @@ const executeFunction = async ({ account_id, name, objective = "OUTCOME_APP_PROM
     // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
+      console.error('Error creating campaign:', JSON.stringify(errorData));
       throw new Error(errorData);
     }
 

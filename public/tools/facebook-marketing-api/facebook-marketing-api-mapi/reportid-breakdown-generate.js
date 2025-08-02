@@ -46,6 +46,7 @@ const executeFunction = async ({ account_id, report_attribution_id2, token, leve
     // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
+      console.error('Error generating report breakdown:', JSON.stringify(errorData));
       throw new Error(errorData);
     }
 

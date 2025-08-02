@@ -26,6 +26,7 @@ const executeFunction = async ({ account_id, token, base_url = 'https://graph.fa
     // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
+      console.error('Error fetching reach frequency predictions:', JSON.stringify(errorData));
       throw new Error(errorData);
     }
 

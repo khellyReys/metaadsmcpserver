@@ -29,6 +29,7 @@ const executeFunction = async ({ account_id, token, limit = 300 }) => {
     // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
+      console.error('Error getting ad set details:', JSON.stringify(errorData));
       throw new Error(errorData);
     }
 

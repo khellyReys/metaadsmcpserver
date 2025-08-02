@@ -29,6 +29,7 @@ const executeFunction = async ({ ad_id_awareness, name = "PostManAdTrafficUpdate
     // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
+      console.error('Error updating ad name and status:', JSON.stringify(errorData));
       throw new Error(errorData);
     }
 

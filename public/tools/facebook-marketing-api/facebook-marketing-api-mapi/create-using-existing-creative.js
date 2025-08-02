@@ -34,6 +34,7 @@ const executeFunction = async ({ account_id, object_story_id, page_id, name = 'p
     // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
+      console.error('Error creating ad creative:', JSON.stringify(errorData));
       throw new Error(errorData);
     }
 

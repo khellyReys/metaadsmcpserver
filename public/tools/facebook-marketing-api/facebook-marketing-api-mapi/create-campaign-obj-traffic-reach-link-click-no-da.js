@@ -28,6 +28,7 @@ const executeFunction = async ({ account_id, token, objective = 'OUTCOME_TRAFFIC
 
     if (!response.ok) {
       const errorData = await response.json();
+      console.error('Error creating campaign:', JSON.stringify(errorData));
       throw new Error(errorData);
     }
 
@@ -48,7 +49,7 @@ const apiTool = {
   definition: {
     type: 'function',
     function: {
-      name: 'create_campaign',
+      name: 'create_campaign_traffic_reach_link_click_no_da',
       description: 'Create a campaign in the Facebook Marketing API.',
       parameters: {
         type: 'object',

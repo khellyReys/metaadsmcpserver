@@ -26,6 +26,7 @@ const executeFunction = async ({ adset_id, base_url }) => {
     // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
+      console.error('Error retrieving ad set fields:', JSON.stringify(errorData));
       throw new Error(errorData);
     }
 

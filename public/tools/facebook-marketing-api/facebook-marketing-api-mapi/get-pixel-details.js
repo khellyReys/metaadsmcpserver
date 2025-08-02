@@ -27,6 +27,7 @@ const executeFunction = async ({ account_id, base_url = 'https://graph.facebook.
     // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
+      console.error('Error getting pixel details:', JSON.stringify(errorData));
       throw new Error(errorData);
     }
 

@@ -26,6 +26,7 @@ const executeFunction = async ({ base_url, report_id_breakdowns }) => {
     // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
+      console.error('Error fetching report ID breakdowns insights:', JSON.stringify(errorData));
       throw new Error(errorData);
     }
 

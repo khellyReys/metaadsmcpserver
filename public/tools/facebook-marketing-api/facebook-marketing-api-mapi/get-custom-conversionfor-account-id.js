@@ -27,6 +27,7 @@ const executeFunction = async ({ account_id }) => {
     // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
+      console.error('Error fetching custom conversions:', JSON.stringify(errorData));
       throw new Error(errorData);
     }
 

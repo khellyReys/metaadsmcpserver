@@ -30,6 +30,7 @@ const executeFunction = async ({ campaign_id_traffic, campaign_id_awareness, cam
     // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
+      console.error('Error retrieving campaign groups:', JSON.stringify(errorData));
       throw new Error(errorData);
     }
 

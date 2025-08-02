@@ -37,6 +37,7 @@ const executeFunction = async ({ ad_id, date_preset = 'maximum', limit = 100, ac
     // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
+      console.error('Error getting insights for ads group:', JSON.stringify(errorData));
       throw new Error(errorData);
     }
 

@@ -33,6 +33,7 @@ const executeFunction = async ({ account_id, token, daily_budget, name, objectiv
     // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
+      console.error('Error creating campaign:', JSON.stringify(errorData));
       throw new Error(errorData);
     }
 

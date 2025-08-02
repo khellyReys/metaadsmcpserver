@@ -30,6 +30,7 @@ const executeFunction = async ({ account_id, campaign_id, token, name = "PostMan
 
     if (!response.ok) {
       const errorData = await response.json();
+      console.error('Error creating ad set:', JSON.stringify(errorData));
       throw new Error(errorData);
     }
 

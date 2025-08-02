@@ -27,6 +27,7 @@ const executeFunction = async ({ adCreativeId }) => {
     // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
+      console.error('Error getting creative details:', JSON.stringify(errorData));
       throw new Error(errorData);
     }
 

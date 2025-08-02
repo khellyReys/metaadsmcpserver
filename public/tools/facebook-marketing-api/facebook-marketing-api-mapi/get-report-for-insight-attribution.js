@@ -26,6 +26,7 @@ const executeFunction = async ({ amazon_report_attribution_id2, base_url }) => {
     // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
+      console.error('Error retrieving report for insight attribution:', JSON.stringify(errorData));
       throw new Error(errorData);
     }
 

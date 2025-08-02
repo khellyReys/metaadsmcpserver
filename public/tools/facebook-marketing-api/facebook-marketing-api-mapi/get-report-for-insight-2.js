@@ -36,6 +36,7 @@ const executeFunction = async ({ account_id, token, since = "2023-03-13", until 
     // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
+      console.error('Error getting report insights:', JSON.stringify(errorData));
       throw new Error(errorData);
     }
 

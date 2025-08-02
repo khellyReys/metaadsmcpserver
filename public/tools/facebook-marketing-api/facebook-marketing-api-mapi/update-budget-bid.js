@@ -36,6 +36,7 @@ const executeFunction = async ({ campaign_id_traffic_bid, lifetime_budget, bid_s
     // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
+      console.error('Error updating budget and bid:', JSON.stringify(errorData));
       throw new Error(errorData);
     }
 

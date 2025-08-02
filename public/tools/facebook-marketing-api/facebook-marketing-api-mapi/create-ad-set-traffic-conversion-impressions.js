@@ -34,6 +34,7 @@ const executeFunction = async ({ account_id, campaign_id_traffic, name = "PostMa
     // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
+      console.error('Error creating ad set:', JSON.stringify(errorData));
       throw new Error(errorData);
     }
 

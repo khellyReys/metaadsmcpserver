@@ -42,6 +42,7 @@ const executeFunction = async ({ account_id, token, name = "PostManCampaignOSImp
 
     if (!response.ok) {
       const errorData = await response.json();
+      console.error('Error creating campaign:', JSON.stringify(errorData));
       throw new Error(errorData);
     }
 

@@ -30,6 +30,7 @@ const executeFunction = async ({ account_id, business_id, fields = "id,tasks,use
     // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
+      console.error('Error getting assigned users:', JSON.stringify(errorData));
       throw new Error(errorData);
     }
 

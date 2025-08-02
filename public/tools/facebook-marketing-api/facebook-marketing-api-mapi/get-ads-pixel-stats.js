@@ -26,6 +26,7 @@ const executeFunction = async ({ pixel_id, base_url = 'https://graph.facebook.co
     // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
+      console.error('Error fetching Ads Pixel statistics:', JSON.stringify(errorData));
       throw new Error(errorData);
     }
 

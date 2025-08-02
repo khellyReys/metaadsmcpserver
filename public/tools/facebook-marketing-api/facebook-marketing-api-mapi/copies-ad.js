@@ -28,6 +28,7 @@ const executeFunction = async ({ ad_id_awareness, token, status_option = 'PAUSED
     // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
+      console.error('Error copying ad:', JSON.stringify(errorData));
       throw new Error(errorData);
     }
 

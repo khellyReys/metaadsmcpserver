@@ -29,6 +29,7 @@ const executeFunction = async ({ campaing_id_existing_ad }) => {
     // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
+      console.error('Error retrieving campaign details:', JSON.stringify(errorData));
       throw new Error(errorData);
     }
 
