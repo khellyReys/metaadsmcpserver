@@ -16,15 +16,16 @@
     "list-tools": "node index.js tools"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.0",
+    "@supabase/supabase-js": "^2.53.0",
     "body-parser": "^2.2.0",
+    "commander": "^13.1.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^5.1.0",
     "lucide-react": "^0.344.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "@modelcontextprotocol/sdk": "^1.17.0",
-    "commander": "^13.1.0"
+    "react-dom": "^18.3.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.9.1",

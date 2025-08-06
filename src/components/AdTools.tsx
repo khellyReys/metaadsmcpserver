@@ -47,18 +47,18 @@ const AdTools: React.FC<AdToolsProps> = ({ businessId, secret }) => {
       const seen = new Set<string>();
       for (const path of toolPaths) {
         try {
-          const mod = await import(`../../tools/${path}`);
-          const def = mod.apiTool?.definition?.function;
-          if (def?.name && def?.description && !seen.has(def.name)) {
-            seen.add(def.name);
-            loaded.push({
-              id: `${def.name}:${path}`,
-              name: def.name,
-              description: def.description,
-              category: mod.apiTool.definition.function.category || "Uncategorized",
-              parameters: def.parameters || undefined,
-            });
-          }
+          // const mod = await import(`../../tools/${path}`);
+          // const def = mod.apiTool?.definition?.function;
+          // if (def?.name && def?.description && !seen.has(def.name)) {
+          //   seen.add(def.name);
+          //   loaded.push({
+          //     id: `${def.name}:${path}`,
+          //     name: def.name,
+          //     description: def.description,
+          //     category: mod.apiTool.definition.function.category || "Uncategorized",
+          //     parameters: def.parameters || undefined,
+          //   });
+          // }
         } catch {}
       }
       setTools(loaded);
