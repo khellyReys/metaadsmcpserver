@@ -44,5 +44,6 @@ export const toolPaths = [
   'facebook-marketing-api/facebook-marketing-api-mapi/create-ad-set-traffic-target-igda-off.js',
   'facebook-marketing-api/facebook-marketing-api-mapi/get-insight-for-ads-group.js',
   'facebook-marketing-api/facebook-marketing-api-mapi/get-report-for-insight-2.js',
-  'facebook-marketing-api/facebook-marketing-api-mapi/reportid-breakdown-generate.js'
+  'facebook-marketing-api/facebook-marketing-api-mapi/reportid-breakdown-generate.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/create-campaign.js'
 ];

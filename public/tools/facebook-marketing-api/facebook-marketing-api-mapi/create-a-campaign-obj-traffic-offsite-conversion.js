@@ -10,7 +10,7 @@
  * @returns {Promise<Object>} - The result of the campaign creation.
  */
 const executeFunction = async ({ account_id, token, daily_budget = 500, name = "PostManCampaignOT1", status = "PAUSED" }) => {
-  const baseUrl = 'https://graph.facebook.com/v12.0'; // Base URL will be provided by the user
+  const baseUrl = ''; // Base URL will be provided by the user
   const url = `${baseUrl}/act_${account_id}/campaigns?objective=OUTCOME_TRAFFIC&status=${status}&special_ad_categories=[]&optimization_goal=OFFSITE_CONVERSIONS&daily_budget=${daily_budget}&billing_event=LINK_CLICKS&targeting=targeting={ "geo_locations": {"countries":["US"]}, "interests": [{id: 6003139266461, 'name': 'Movies'}]}&promoted_object&status=${status}&name=${name}&bid_strategy=LOWEST_COST_WITHOUT_CAP&REACH=REACH`;
 
   try {
