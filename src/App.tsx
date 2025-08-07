@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import Header from './components/Header';
 import Hero from './components/Hero';
 import Features from './components/Features';
@@ -11,31 +11,18 @@ import FacebookLogin from './components/FacebookLogin';
 import OAuthCallback from './components/OAuthCallback';
 import AdTools from './components/AdTools';
 
-function App() {
-  const [selectedBusinessId, setSelectedBusinessId] = useState<string>('');
-  const [mcpSecret, setMcpSecret] = useState<string>('');
-  const [authData, setAuthData] = useState<any>(null);
-
-  const handleBusinessSelected = (businessId: string, secret: string, serverData?: any) => {
-    setSelectedBusinessId(businessId);
-    setMcpSecret(secret);
-    setAuthData(serverData);
+// Landing page component that uses proper navigation
+const LandingPage = () => {
+  const navigate = useNavigate();
+  
+  const handleGetStarted = () => {
+    navigate('/login');
   };
 
-  const handleAuthComplete = (userData: any) => {
-    console.log('Auth completed with user data:', userData);
-    setAuthData(userData);
-  };
-
-  const handleAuthError = (error: string) => {
-    console.error('Auth error:', error);
-    setAuthData(null);
-  };
-
-  const LandingPage = () => (
+  return (
     <div className="min-h-screen bg-white">
-      <Header onGetStarted={() => window.location.href = '/login'} />
-      <Hero onGetStarted={() => window.location.href = '/login'} />
+      <Header onGetStarted={handleGetStarted} />
+      <Hero onGetStarted={handleGetStarted} />
       <Features />
       <APISection />
       <Stats />
@@ -43,54 +30,93 @@ function App() {
       <Footer />
     </div>
   );
+};
+
+// Main app wrapper component
+const AppContent = () => {
+  const [selectedBusinessId, setSelectedBusinessId] = useState<string>('');
+  const [mcpSecret, setMcpSecret] = useState<string>('');
+  const [authData, setAuthData] = useState<any>(null);
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  // Debug: Log current location
+  useEffect(() => {
+    console.log('Current route:', location.pathname);
+  }, [location]);
+
+  const handleBusinessSelected = (businessId: string, secret: string, serverData?: any) => {
+    setSelectedBusinessId(businessId);
+    setMcpSecret(secret);
+    setAuthData(serverData);
+    navigate('/tools');
+  };
+
+  const handleAuthComplete = (userData: any) => {
+    console.log('Auth completed with user data:', userData);
+    setAuthData(userData);
+    navigate('/login');
+  };
+
+  const handleAuthError = (error: string) => {
+    console.error('Auth error:', error);
+    setAuthData(null);
+    navigate('/');
+  };
 
   return (
+    <Routes>
+      {/* Landing page */}
+      <Route path="/" element={<LandingPage />} />
+      
+      {/* OAuth callback route */}
+      <Route 
+        path="/auth/callback" 
+        element={
+          <OAuthCallback 
+            onAuthComplete={handleAuthComplete}
+            onError={handleAuthError}
+          />
+        } 
+      />
+      
+      {/* Login route */}
+      <Route 
+        path="/login" 
+        element={
+          <FacebookLogin 
+            onServerSelected={handleBusinessSelected} 
+            initialAuthData={authData}
+          />
+        } 
+      />
+      
+      {/* Tools route */}
+      <Route 
+        path="/tools" 
+        element={
+          selectedBusinessId ? (
+            <AdTools
+              businessId={selectedBusinessId}
+              secret={mcpSecret}
+              mcpServerLink={import.meta.env.VITE_MCP_SERVER_URL || "https://metaadsmcpserver.onrender.com"}
+            />
+          ) : (
+            <Navigate to="/login" replace />
+          )
+        } 
+      />
+      
+      {/* Catch all route */}
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
+};
+
+function App() {
+  return (
     <Router>
-      <Routes>
-        {/* Landing page */}
-        <Route path="/" element={<LandingPage />} />
-        
-        {/* OAuth callback route - MUST be here for the redirect to work */}
-        <Route 
-          path="/auth/callback" 
-          element={
-            <OAuthCallback 
-              onAuthComplete={handleAuthComplete}
-              onError={handleAuthError}
-            />
-          } 
-        />
-        
-        {/* Login route */}
-        <Route 
-          path="/login" 
-          element={
-            <FacebookLogin 
-              onServerSelected={handleBusinessSelected} 
-              initialAuthData={authData}
-            />
-          } 
-        />
-        
-        {/* Tools route */}
-        <Route 
-          path="/tools" 
-          element={
-            selectedBusinessId ? (
-              <AdTools
-                businessId={selectedBusinessId}
-                secret={mcpSecret}
-                mcpServerLink={import.meta.env.VITE_MCP_SERVER_URL || "https://metaadsmcpserver.onrender.com"}
-              />
-            ) : (
-              <Navigate to="/login" replace />
-            )
-          } 
-        />
-        
-        {/* Catch all route */}
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+      <AppContent />
     </Router>
   );
 }
