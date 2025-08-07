@@ -12,39 +12,30 @@ import OAuthCallback from './components/OAuthCallback';
 import AdTools from './components/AdTools';
 
 function App() {
-  const [currentView, setCurrentView] = useState<'landing' | 'login' | 'tools'>('landing');
   const [selectedBusinessId, setSelectedBusinessId] = useState<string>('');
   const [mcpSecret, setMcpSecret] = useState<string>('');
   const [authData, setAuthData] = useState<any>(null);
-
-  const handleGetStarted = () => {
-    setCurrentView('login');
-  };
 
   const handleBusinessSelected = (businessId: string, secret: string, serverData?: any) => {
     setSelectedBusinessId(businessId);
     setMcpSecret(secret);
     setAuthData(serverData);
-    setCurrentView('tools');
   };
 
   const handleAuthComplete = (userData: any) => {
     console.log('Auth completed with user data:', userData);
     setAuthData(userData);
-    // Redirect to login component to continue the flow
-    setCurrentView('login');
   };
 
   const handleAuthError = (error: string) => {
     console.error('Auth error:', error);
-    // Redirect back to landing page on error
-    setCurrentView('landing');
+    setAuthData(null);
   };
 
   const LandingPage = () => (
     <div className="min-h-screen bg-white">
-      <Header onGetStarted={handleGetStarted} />
-      <Hero onGetStarted={handleGetStarted} />
+      <Header onGetStarted={() => window.location.href = '/login'} />
+      <Hero onGetStarted={() => window.location.href = '/login'} />
       <Features />
       <APISection />
       <Stats />
@@ -56,28 +47,10 @@ function App() {
   return (
     <Router>
       <Routes>
-        {/* Main landing page */}
-        <Route 
-          path="/" 
-          element={
-            currentView === 'landing' ? (
-              <LandingPage />
-            ) : currentView === 'login' ? (
-              <FacebookLogin 
-                onServerSelected={handleBusinessSelected} 
-                initialAuthData={authData}
-              />
-            ) : (
-              <AdTools
-                businessId={selectedBusinessId}
-                secret={mcpSecret}
-                mcpServerLink="https://metaadsmcpserver.onrender.com"
-              />
-            )
-          } 
-        />
+        {/* Landing page */}
+        <Route path="/" element={<LandingPage />} />
         
-        {/* OAuth callback route */}
+        {/* OAuth callback route - MUST be here for the redirect to work */}
         <Route 
           path="/auth/callback" 
           element={
@@ -107,7 +80,7 @@ function App() {
               <AdTools
                 businessId={selectedBusinessId}
                 secret={mcpSecret}
-                mcpServerLink="https://metaadsmcpserver.onrender.com"
+                mcpServerLink={import.meta.env.VITE_MCP_SERVER_URL || "https://metaadsmcpserver.onrender.com"}
               />
             ) : (
               <Navigate to="/login" replace />

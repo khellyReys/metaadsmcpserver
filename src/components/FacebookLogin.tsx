@@ -314,61 +314,59 @@ const fetchAndSaveBusinessAccounts = async (token: string, userId: string) => {
     }
   };
 
-const exchangeTokenAndSaveUser = async (providerToken: string, facebookData: any, supabaseUser: any) => {
-  try {
-    if (!providerToken) {
-      console.warn('No provider token available, using basic data');
-      await saveUserToDatabase(null, facebookData, supabaseUser);
-      return;
-    }
-
-    console.log('Calling edge function to exchange token...');
-    
-    // Get the session for authorization
-    const { data: { session } } = await supabase.auth.getSession();
-    
-    const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/exchange-facebook-token`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        // Use the user's JWT token instead of anon key for edge functions
-        'Authorization': `Bearer ${session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-        'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY
-      },
-      body: JSON.stringify({
-        shortLivedToken: providerToken,
-        userId: supabaseUser.id,
-        // Include the full callback URL if your edge function expects it
-        redirectUri: `${window.location.origin}/auth/callbackdsdfdsf`
-      })
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    const data = await response.json();
-
-    if (data.success) {
-      console.log('Token exchange successful:', {
-        expiresAt: data.expiresAt,
-        scopes: data.grantedScopes,
-        facebookUserId: data.facebookUserId
+  const exchangeTokenAndSaveUser = async (providerToken: string, facebookData: any, supabaseUser: any) => {
+    try {
+      if (!providerToken) {
+        console.warn('No provider token available, using basic data');
+        await saveUserToDatabase(null, facebookData, supabaseUser);
+        return;
+      }
+  
+      console.log('Calling edge function to exchange token...');
+      
+      // Get the session for authorization
+      const { data: { session } } = await supabase.auth.getSession();
+      
+      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/exchange-facebook-token`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY
+        },
+        body: JSON.stringify({
+          shortLivedToken: providerToken,
+          userId: supabaseUser.id
+          // Remove the redirectUri line - it's not needed for token exchange
+        })
       });
-
-      setFacebookAccessToken(data.longLivedToken);
-      await saveUserToDatabase(data, facebookData, supabaseUser);
-    } else {
-      console.warn('Token exchange failed, using provider token:', data.error);
+  
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+  
+      const data = await response.json();
+  
+      if (data.success) {
+        console.log('Token exchange successful:', {
+          expiresAt: data.expiresAt,
+          scopes: data.grantedScopes,
+          facebookUserId: data.facebookUserId
+        });
+  
+        setFacebookAccessToken(data.longLivedToken);
+        await saveUserToDatabase(data, facebookData, supabaseUser);
+      } else {
+        console.warn('Token exchange failed, using provider token:', data.error);
+        await saveUserToDatabase(null, facebookData, supabaseUser, providerToken);
+      }
+  
+    } catch (error) {
+      console.error('Token exchange failed:', error);
+      // Save with provider token as fallback
       await saveUserToDatabase(null, facebookData, supabaseUser, providerToken);
     }
-
-  } catch (error) {
-    console.error('Token exchange failed:', error);
-    // Save with provider token as fallback
-    await saveUserToDatabase(null, facebookData, supabaseUser, providerToken);
-  }
-};
+  };
 
   const saveUserToDatabase = async (tokenData: any, facebookData: any, supabaseUser: any, fallbackToken?: string) => {
     try {

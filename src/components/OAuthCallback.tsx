@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { CheckCircle, AlertCircle, Loader } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 
 // Initialize Supabase client
 const supabase = createClient(
@@ -17,6 +18,7 @@ const OAuthCallback: React.FC<OAuthCallbackProps> = ({ onAuthComplete, onError }
   const [status, setStatus] = useState<'processing' | 'success' | 'error'>('processing');
   const [message, setMessage] = useState('Processing your Facebook login...');
   const [progress, setProgress] = useState(0);
+  const navigate = useNavigate();
 
   useEffect(() => {
     const handleOAuthCallback = async () => {
@@ -27,10 +29,8 @@ const OAuthCallback: React.FC<OAuthCallbackProps> = ({ onAuthComplete, onError }
 
         // Check URL parameters first
         const hash = window.location.hash;
-        const search = window.location.search;
         
         console.log('OAuth callback - URL hash:', hash);
-        console.log('OAuth callback - URL search:', search);
 
         // Get the current session
         setProgress(40);
@@ -46,33 +46,19 @@ const OAuthCallback: React.FC<OAuthCallbackProps> = ({ onAuthComplete, onError }
           // Try to get session from URL parameters
           console.log('No session found, checking URL parameters...');
           
-          // Parse URL hash parameters
-          if (hash) {
-            const params = new URLSearchParams(hash.substring(1));
-            const accessToken = params.get('access_token');
-            const providerToken = params.get('provider_token');
-            
-            if (accessToken) {
-              console.log('Found tokens in URL, waiting for session...');
-              setMessage('Finalizing authentication...');
-              
-              // Wait a bit for Supabase to process the tokens
-              await new Promise(resolve => setTimeout(resolve, 2000));
-              
-              // Try getting session again
-              const { data: { session: retrySession }, error: retryError } = await supabase.auth.getSession();
-              
-              if (retrySession) {
-                console.log('Session established after retry');
-                await processSession(retrySession);
-                return;
-              } else {
-                throw new Error('Failed to establish session with provided tokens');
-              }
-            }
-          }
+          // Wait a bit for Supabase to process the tokens
+          await new Promise(resolve => setTimeout(resolve, 2000));
           
-          throw new Error('No valid session or tokens found');
+          // Try getting session again
+          const { data: { session: retrySession }, error: retryError } = await supabase.auth.getSession();
+          
+          if (retrySession) {
+            console.log('Session established after retry');
+            await processSession(retrySession);
+            return;
+          } else {
+            throw new Error('Failed to establish session with provided tokens');
+          }
         }
 
         await processSession(session);
@@ -82,13 +68,18 @@ const OAuthCallback: React.FC<OAuthCallbackProps> = ({ onAuthComplete, onError }
         setStatus('error');
         setMessage(error instanceof Error ? error.message : 'Authentication failed');
         onError(error instanceof Error ? error.message : 'Authentication failed');
+        
+        // Redirect to home page after error
+        setTimeout(() => {
+          navigate('/');
+        }, 3000);
       }
     };
 
     const processSession = async (session: any) => {
       try {
         setProgress(60);
-        setMessage('Exchanging Facebook tokens...');
+        setMessage('Processing Facebook data...');
 
         const user = session.user;
         const facebookToken = session.provider_token;
@@ -106,12 +97,6 @@ const OAuthCallback: React.FC<OAuthCallbackProps> = ({ onAuthComplete, onError }
         };
 
         console.log('Processing Facebook user:', facebookData);
-
-        setProgress(80);
-        setMessage('Saving user data...');
-
-        // Exchange token and save user data
-        await exchangeTokenAndSaveUser(facebookToken, facebookData, user);
 
         setProgress(100);
         setMessage('Authentication successful!');
@@ -135,77 +120,8 @@ const OAuthCallback: React.FC<OAuthCallbackProps> = ({ onAuthComplete, onError }
       }
     };
 
-    const exchangeTokenAndSaveUser = async (providerToken: string, facebookData: any, supabaseUser: any) => {
-      try {
-        console.log('Calling edge function to exchange token...');
-        
-        const { data: { session } } = await supabase.auth.getSession();
-        
-        const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/exchange-facebook-token`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-            'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY
-          },
-          body: JSON.stringify({
-            shortLivedToken: providerToken,
-            userId: supabaseUser.id
-            // Removed redirectUri - not needed for token exchange
-          })
-        });
-
-        const data = await response.json();
-
-        if (data.success) {
-          console.log('Token exchange successful');
-          await saveUserToDatabase(data, facebookData, supabaseUser);
-        } else {
-          console.warn('Token exchange failed, using provider token');
-          await saveUserToDatabase(null, facebookData, supabaseUser, providerToken);
-        }
-
-      } catch (error) {
-        console.error('Token exchange failed:', error);
-        await saveUserToDatabase(null, facebookData, supabaseUser, providerToken);
-      }
-    };
-
-    const saveUserToDatabase = async (tokenData: any, facebookData: any, supabaseUser: any, fallbackToken?: string) => {
-      try {
-        const tokenToUse = tokenData?.longLivedToken || fallbackToken;
-        const expiresAt = tokenData?.expiresAt || new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
-        const scopes = tokenData?.grantedScopes || ['email', 'pages_read_engagement', 'business_management', 'ads_management'];
-
-        const { data: userAccessToken, error: dbError } = await supabase
-          .rpc('upsert_user_with_facebook_data', {
-            p_user_id: supabaseUser.id,
-            p_email: supabaseUser.email,
-            p_name: facebookData.name,
-            p_facebook_id: facebookData.id,
-            p_facebook_name: facebookData.name,
-            p_facebook_email: supabaseUser.email,
-            p_facebook_picture_url: facebookData.picture_url,
-            p_facebook_access_token: fallbackToken,
-            p_facebook_long_lived_token: tokenToUse,
-            p_facebook_token_expires_at: expiresAt,
-            p_facebook_scopes: scopes
-          });
-
-        if (dbError) {
-          throw new Error('Failed to save user data: ' + dbError.message);
-        }
-
-        console.log('User data saved successfully');
-
-      } catch (error) {
-        console.error('Error saving user to database:', error);
-        throw error;
-      }
-    };
-
     handleOAuthCallback();
-  }, [onAuthComplete, onError]);
+  }, [onAuthComplete, onError, navigate]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 flex items-center justify-center p-4">
@@ -267,10 +183,10 @@ const OAuthCallback: React.FC<OAuthCallbackProps> = ({ onAuthComplete, onError }
               <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
                 <p className="text-red-800 text-sm mb-3">{message}</p>
                 <button
-                  onClick={() => window.location.href = '/'}
+                  onClick={() => navigate('/')}
                   className="text-blue-600 hover:text-blue-700 text-sm font-medium"
                 >
-                  Return to Login
+                  Return to Home
                 </button>
               </div>
             )}
