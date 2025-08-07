@@ -124,7 +124,7 @@ async function run() {
       "https://localhost:3000",          // HTTPS localhost
       "http://localhost:5173",           // Vite default
       "https://localhost:5173",          // HTTPS Vite
-      "https://your-frontend-domain.com" // Replace with your actual frontend domain
+      "https://metaadsmcpserver-1.onrender.com" // Replace with your actual frontend domain
     ];
     
     // FIXED: Improved CORS configuration

@@ -99,7 +99,7 @@ const AppContent = () => {
             <AdTools
               businessId={selectedBusinessId}
               secret={mcpSecret}
-              mcpServerLink={import.meta.env.VITE_MCP_SERVER_URL || "https://metaadsmcpserver.onrender.com"}
+              mcpServerLink={import.meta.env.VITE_MCP_SERVER_URL || "https://https://localhost:3000"}
             />
           ) : (
             <Navigate to="/login" replace />
