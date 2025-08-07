@@ -7,7 +7,7 @@ import APISection from './components/APISection';
 import Stats from './components/Stats';
 import Pricing from './components/Pricing';
 import Footer from './components/Footer';
-import FacebookLogin from './components/FacebookLogin';
+import FacebookLogin from './components/FacebookLogin'; // This now references your refactored component
 import OAuthCallback from './components/OAuthCallback';
 import AdTools from './components/AdTools';
 
@@ -45,9 +45,10 @@ const AppContent = () => {
     console.log('Current route:', location.pathname);
   }, [location]);
 
-  const handleBusinessSelected = (businessId: string, secret: string, serverData?: any) => {
+  const handleBusinessSelected = (serverId: string, businessId: string, serverData?: any) => {
+    // Updated to match your new component's interface
     setSelectedBusinessId(businessId);
-    setMcpSecret(secret);
+    setMcpSecret(serverId); // Using serverId as the secret/identifier
     setAuthData(serverData);
     navigate('/tools');
   };
@@ -99,7 +100,7 @@ const AppContent = () => {
             <AdTools
               businessId={selectedBusinessId}
               secret={mcpSecret}
-              mcpServerLink={import.meta.env.VITE_MCP_SERVER_URL || "https://https://localhost:3000"}
+              mcpServerLink={import.meta.env.VITE_MCP_SERVER_URL || "https://localhost:3000"}
             />
           ) : (
             <Navigate to="/login" replace />
