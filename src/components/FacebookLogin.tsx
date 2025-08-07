@@ -285,7 +285,7 @@ const fetchAndSaveBusinessAccounts = async (token: string, userId: string) => {
     try {
       // Use the frontend URL for the callback, not the MCP server URL
       const frontendUrl = import.meta.env.VITE_APP_URL || window.location.origin;
-      const redirectUrl = `${frontendUrl}/auth/callback`;
+      const redirectUrl = `${frontendUrl}/login`;
       
       console.log('OAuth redirect URL:', redirectUrl);
 
@@ -749,7 +749,7 @@ const connectToSSE = (accessToken: string) => {
   const encodedToken = btoa(tokenString);
   
   // Use the MCP server URL for SSE connections
-  const mcpServerUrl = import.meta.env.VITE_MCP_SERVER_URL || 'https://metaadsmcpserver.onrender.com';
+  const mcpServerUrl = import.meta.env.VITE_MCP_SERVER_URL || 'https://localhost:3000';
   const sseUrl = `${mcpServerUrl}/sse?token=${encodeURIComponent(encodedToken)}`;
   console.log('SSE Connection Details:');
   console.log('- Server ID:', serverId);
@@ -836,7 +836,7 @@ const testServerConnection = async () => {
     console.log('Testing server connection...');
     
     // Use the MCP server URL for health checks
-    const mcpServerUrl = import.meta.env.VITE_MCP_SERVER_URL || 'https://metaadsmcpserver.onrender.com';
+    const mcpServerUrl = import.meta.env.VITE_MCP_SERVER_URL || 'https://localhost:3000';
     const testUrl = `${mcpServerUrl}/test`;
     
     // Try the test endpoint first
