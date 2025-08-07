@@ -25,7 +25,7 @@ function App() {
   };
 
   if (currentView === 'login') {
-    return <FacebookLogin onBusinessSelected={handleBusinessSelected} />;
+    return <FacebookLogin onServerSelected ={handleBusinessSelected} />;
   }
 
   if (currentView === 'tools') {

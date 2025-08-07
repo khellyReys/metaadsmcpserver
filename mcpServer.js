@@ -24,6 +24,34 @@ dotenv.config({
 
 const SERVER_NAME = "generated-mcp-server";
 
+// Token validation function (add your own logic here)
+function validateToken(token) {
+  if (!token) {
+    throw new Error("Token is required");
+  }
+  
+  try {
+    // Decode the base64 token
+    const decoded = Buffer.from(token, 'base64').toString('utf-8');
+    console.log("Decoded token:", decoded);
+    
+    // Add your token validation logic here
+    // For example, check if it contains expected server ID and access token
+    if (!decoded.includes(':')) {
+      throw new Error("Invalid token format");
+    }
+    
+    const [serverId, accessToken] = decoded.split(':');
+    if (!serverId || !accessToken) {
+      throw new Error("Invalid token components");
+    }
+    
+    return { serverId, accessToken };
+  } catch (error) {
+    throw new Error(`Token validation failed: ${error.message}`);
+  }
+}
+
 async function transformTools(tools) {
   return tools
     .map((tool) => {
@@ -90,69 +118,150 @@ async function run() {
     const transports = {};
     const servers = {};
 
+    // FIXED: Updated allowed origins to include your frontend
     const allowedOrigins = [
-      "http://localhost:5173",                        // local Vite
-      "https://metaadsmcpserver-1.onrender.com"       // your deployed React app
+      "http://localhost:3000",           // Your React dev server
+      "https://localhost:3000",          // HTTPS localhost
+      "http://localhost:5173",           // Vite default
+      "https://localhost:5173",          // HTTPS Vite
+      "https://your-frontend-domain.com" // Replace with your actual frontend domain
     ];
     
+    // FIXED: Improved CORS configuration
     app.use(
       cors({
         origin: (incomingOrigin, callback) => {
-          if (!incomingOrigin || allowedOrigins.includes(incomingOrigin)) {
+          console.log("Incoming origin:", incomingOrigin);
+          
+          // Allow requests with no origin (like mobile apps or curl)
+          if (!incomingOrigin) {
+            callback(null, true);
+            return;
+          }
+          
+          if (allowedOrigins.includes(incomingOrigin)) {
             callback(null, true);
           } else {
+            console.error(`Origin ${incomingOrigin} not allowed by CORS`);
             callback(new Error(`Origin ${incomingOrigin} not allowed by CORS`));
           }
         },
-        methods: ["GET", "POST"],
-        allowedHeaders: ["Content-Type"],
+        methods: ["GET", "POST", "OPTIONS"],
+        allowedHeaders: [
+          "Content-Type", 
+          "Authorization", 
+          "Cache-Control", 
+          "X-Requested-With"
+        ],
         credentials: true,
       })
     );
 
-    // SSE “connect” endpoint
-    app.get("/sse", async (_req, res) => {
-      // Disable proxy buffering so the SDK’s headers go out immediately
-      res.setHeader("X-Accel-Buffering", "no");
+    // Add body parser middleware
+    app.use(express.json());
 
-      // Let the MCP SDK handle writing the correct SSE headers itself
-      const server = new Server(
-        { name: SERVER_NAME, version: "0.1.0" },
-        { capabilities: { tools: {} } }
-      );
-      server.onerror = (err) => console.error("[MCP Error]", err);
+    // FIXED: SSE endpoint with token validation
+    app.get("/sse", async (req, res) => {
+      console.log("SSE connection attempt with query:", req.query);
+      
+      try {
+        // Validate token from query parameter
+        const token = req.query.token;
+        const tokenData = validateToken(token);
+        console.log("Token validated for server:", tokenData.serverId);
+        
+        // Set CORS headers explicitly for SSE
+        res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+        
+        // Disable proxy buffering so the SDK's headers go out immediately
+        res.setHeader("X-Accel-Buffering", "no");
 
-      await setupServerHandlers(server, tools);
+        // Create MCP server instance
+        const server = new Server(
+          { name: SERVER_NAME, version: "0.1.0" },
+          { capabilities: { tools: {} } }
+        );
+        
+        server.onerror = (err) => {
+          console.error("[MCP Error]", err);
+        };
 
-      const transport = new SSEServerTransport("/messages", res);
-      transports[transport.sessionId] = transport;
-      servers[transport.sessionId] = server;
+        await setupServerHandlers(server, tools);
 
-      res.on("close", async () => {
-        delete transports[transport.sessionId];
-        await server.close();
-        delete servers[transport.sessionId];
-      });
+        // Create SSE transport
+        const transport = new SSEServerTransport("/messages", res);
+        transports[transport.sessionId] = transport;
+        servers[transport.sessionId] = server;
 
-      await server.connect(transport);
+        // Handle client disconnect
+        res.on("close", async () => {
+          console.log("SSE client disconnected, session:", transport.sessionId);
+          delete transports[transport.sessionId];
+          await server.close();
+          delete servers[transport.sessionId];
+        });
+
+        // Connect server to transport
+        await server.connect(transport);
+        console.log("SSE connection established, session:", transport.sessionId);
+        
+      } catch (error) {
+        console.error("SSE connection error:", error);
+        res.status(400).json({ 
+          error: error.message,
+          details: "Token validation or server setup failed"
+        });
+      }
     });
 
-    // Companion POST endpoint for JSON-RPC calls tied to an SSE session
-    app.post("/messages", async (req, res) => {
-      const sessionId = req.query.sessionId;
-      const transport = transports[sessionId];
-      const server = servers[sessionId];
+    // Handle preflight OPTIONS requests
+    app.options("/sse", (req, res) => {
+      res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cache-Control, X-Requested-With');
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.status(200).end();
+    });
 
-      if (transport && server) {
-        await transport.handlePostMessage(req, res);
-      } else {
-        res.status(400).send("No transport/server found for sessionId");
+    // FIXED: Companion POST endpoint for JSON-RPC calls
+    app.post("/messages", async (req, res) => {
+      try {
+        const sessionId = req.query.sessionId;
+        const transport = transports[sessionId];
+        const server = servers[sessionId];
+
+        console.log("POST /messages request for session:", sessionId);
+
+        if (transport && server) {
+          await transport.handlePostMessage(req, res);
+        } else {
+          console.error("No transport/server found for sessionId:", sessionId);
+          res.status(400).json({ 
+            error: "No transport/server found for sessionId",
+            sessionId: sessionId,
+            availableSessions: Object.keys(transports)
+          });
+        }
+      } catch (error) {
+        console.error("POST /messages error:", error);
+        res.status(500).json({ error: error.message });
       }
+    });
+
+    // Add a health check endpoint
+    app.get("/health", (req, res) => {
+      res.json({ 
+        status: "ok", 
+        server: SERVER_NAME, 
+        activeSessions: Object.keys(transports).length
+      });
     });
 
     const port = process.env.PORT || 3001;
     app.listen(port, () => {
       console.log(`[SSE Server] running on port ${port}`);
+      console.log(`[SSE Server] allowed origins:`, allowedOrigins);
     });
   } else {
     // stdio mode: single session over stdin/stdout
