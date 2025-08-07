@@ -139,6 +139,8 @@ const OAuthCallback: React.FC<OAuthCallbackProps> = ({ onAuthComplete, onError }
       try {
         console.log('Calling edge function to exchange token...');
         
+        const { data: { session } } = await supabase.auth.getSession();
+        
         const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/exchange-facebook-token`, {
           method: 'POST',
           headers: {
@@ -149,6 +151,7 @@ const OAuthCallback: React.FC<OAuthCallbackProps> = ({ onAuthComplete, onError }
           body: JSON.stringify({
             shortLivedToken: providerToken,
             userId: supabaseUser.id
+            // Removed redirectUri - not needed for token exchange
           })
         });
 

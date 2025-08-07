@@ -226,7 +226,7 @@ const fetchAndSaveBusinessAccounts = async (token: string, userId: string) => {
     const initConnection = async () => {
       if (selectedServer && servers.length > 0 && step === 'business-selection') {
         // Optional: Test server health first
-        const isHealthy = await testServerHealth();
+        const isHealthy = await testServerConnection();
         if (!isHealthy) {
           setError('Server is not responding. Please try again later.');
           return;
@@ -283,9 +283,9 @@ const fetchAndSaveBusinessAccounts = async (token: string, userId: string) => {
     setError('');
 
     try {
-      // Get the correct redirect URL - always use the callback route
-      const baseUrl = window.location.origin;
-      const redirectUrl = `${baseUrl}/auth/callback`;
+      // Use the frontend URL for the callback, not the MCP server URL
+      const frontendUrl = import.meta.env.VITE_APP_URL || window.location.origin;
+      const redirectUrl = `${frontendUrl}/auth/callback`;
       
       console.log('OAuth redirect URL:', redirectUrl);
 
@@ -293,7 +293,7 @@ const fetchAndSaveBusinessAccounts = async (token: string, userId: string) => {
         provider: 'facebook',
         options: {
           scopes: 'email pages_read_engagement pages_manage_posts pages_show_list business_management ads_management ads_read',
-          redirectTo: redirectUrl, // Always redirect to callback route
+          redirectTo: redirectUrl, // This should be your FRONTEND URL
           queryParams: {
             access_type: 'offline',
             prompt: 'consent',
@@ -305,7 +305,7 @@ const fetchAndSaveBusinessAccounts = async (token: string, userId: string) => {
         throw error;
       }
 
-      // OAuth redirect will happen automatically to /auth/callback
+      // OAuth redirect will happen automatically to the FRONTEND /auth/callback
       
     } catch (err) {
       console.error('Facebook OAuth error:', err);
@@ -339,7 +339,7 @@ const exchangeTokenAndSaveUser = async (providerToken: string, facebookData: any
         shortLivedToken: providerToken,
         userId: supabaseUser.id,
         // Include the full callback URL if your edge function expects it
-        redirectUri: `${window.location.origin}/auth/callback`
+        redirectUri: `${window.location.origin}/auth/callbackdsdfdsf`
       })
     });
 
@@ -737,6 +737,8 @@ const exchangeTokenAndSaveUser = async (providerToken: string, facebookData: any
   };
 
   // SSE Connection function
+// Replace your connectToSSE function with this improved version:
+
 const connectToSSE = (accessToken: string) => {
   if (!accessToken) {
     setError('No server token available for SSE connection');
@@ -744,73 +746,128 @@ const connectToSSE = (accessToken: string) => {
   }
 
   // Create the token in the format your server expects
-  // Format: "serverId:accessToken" encoded as base64
-  const serverId = selectedServer; // Your selected server ID
+  const serverId = selectedServer;
   const tokenString = `${serverId}:${accessToken}`;
-  const encodedToken = btoa(tokenString); // Base64 encode
+  const encodedToken = btoa(tokenString);
   
-  const sseUrl = `https://metaadsmcpserver.onrender.com/sse?token=${encodeURIComponent(encodedToken)}`;
-  console.log('Attempting SSE connection to:', sseUrl);
+  // Use the MCP server URL for SSE connections
+  const mcpServerUrl = import.meta.env.VITE_MCP_SERVER_URL || 'https://metaadsmcpserver.onrender.com';
+  const sseUrl = `${mcpServerUrl}/sse?token=${encodeURIComponent(encodedToken)}`;
+  console.log('SSE Connection Details:');
+  console.log('- Server ID:', serverId);
+  console.log('- Access Token (first 20 chars):', accessToken.substring(0, 20) + '...');
+  console.log('- Token String:', tokenString);
+  console.log('- Encoded Token:', encodedToken);
+  console.log('- Full URL:', sseUrl);
 
   try {
     const eventSource = new EventSource(sseUrl);
 
     eventSource.onopen = (event) => {
-      console.log('SSE connection opened successfully');
+      console.log('✅ SSE connection opened successfully');
+      console.log('Event details:', event);
       setError(''); // Clear any previous errors
     };
 
     eventSource.onmessage = (event) => {
+      console.log('📨 SSE message received:', {
+        data: event.data,
+        lastEventId: event.lastEventId,
+        origin: event.origin,
+        type: event.type
+      });
+      
       try {
-        console.log('SSE raw message:', event.data);
-        
-        // MCP messages might be JSON-RPC format
         if (event.data.startsWith('{')) {
           const data = JSON.parse(event.data);
-          console.log('SSE parsed message:', data);
+          console.log('📋 SSE parsed JSON:', data);
           
           // Handle MCP protocol messages
           if (data.method === 'notifications/initialized') {
-            console.log('MCP server initialized');
+            console.log('🎉 MCP server initialized');
           } else if (data.method === 'tools/list') {
-            console.log('Available tools:', data.result?.tools || []);
+            console.log('🔧 Available tools:', data.result?.tools || []);
+          } else if (data.jsonrpc) {
+            console.log('📡 JSON-RPC message:', data);
           }
+        } else {
+          console.log('📝 Plain text SSE message:', event.data);
         }
       } catch (parseError) {
-        console.error('Error parsing SSE message:', parseError, 'Raw data:', event.data);
+        console.error('❌ Error parsing SSE message:', parseError);
+        console.log('Raw data that failed to parse:', event.data);
       }
     };
 
     eventSource.onerror = (event) => {
-      console.error('SSE connection error:', event);
+      console.error('💥 SSE connection error:', event);
+      console.log('EventSource readyState:', eventSource.readyState);
+      console.log('EventSource URL:', eventSource.url);
       
-      if (eventSource.readyState === EventSource.CLOSED) {
-        setError('SSE connection was closed. Please try reconnecting.');
-      } else if (eventSource.readyState === EventSource.CONNECTING) {
-        console.log('SSE attempting to reconnect...');
-      } else {
-        setError('SSE connection failed. Check server status and token validity.');
+      switch (eventSource.readyState) {
+        case EventSource.CONNECTING:
+          console.log('🔄 SSE attempting to reconnect...');
+          setError('Connecting to server...');
+          break;
+        case EventSource.CLOSED:
+          console.log('🚫 SSE connection was closed');
+          setError('Connection to server was lost. Please try reconnecting.');
+          break;
+        case EventSource.OPEN:
+          console.log('✅ SSE connection is open but got error event');
+          break;
+        default:
+          console.log('❓ Unknown SSE state:', eventSource.readyState);
+          setError('Unknown connection state. Please try again.');
       }
     };
 
     return eventSource;
 
   } catch (error) {
-    console.error('Failed to create SSE connection:', error);
+    console.error('💥 Failed to create SSE connection:', error);
     setError(`Failed to connect to server: ${error instanceof Error ? error.message : 'Unknown error'}`);
     return null;
   }
 };
 
 // Test the server health first (optional)
-const testServerHealth = async () => {
+
+const testServerConnection = async () => {
   try {
-    const response = await fetch('https://metaadsmcpserver.onrender.com/health');
-    const health = await response.json();
-    console.log('Server health:', health);
-    return health.status === 'ok';
+    console.log('Testing server connection...');
+    
+    // Use the MCP server URL for health checks
+    const mcpServerUrl = import.meta.env.VITE_MCP_SERVER_URL || 'https://metaadsmcpserver.onrender.com';
+    const testUrl = `${mcpServerUrl}/test`;
+    
+    // Try the test endpoint first
+    const testResponse = await fetch(testUrl, {
+      method: 'GET',
+      mode: 'cors',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (testResponse.ok) {
+      const testData = await testResponse.json();
+      console.log('Server test successful:', testData);
+      return true;
+    } else {
+      console.error('Server test failed with status:', testResponse.status);
+      return false;
+    }
   } catch (error) {
-    console.error('Server health check failed:', error);
+    console.error('Server connection test failed:', error);
+    
+    // If fetch fails completely, the server might be down or CORS is blocking everything
+    if (error.message.includes('CORS')) {
+      console.log('CORS issue detected - server may not have updated CORS settings');
+    } else if (error.message.includes('Failed to fetch')) {
+      console.log('Server appears to be down or unreachable');
+    }
+    
     return false;
   }
 };
@@ -883,6 +940,7 @@ const testServerHealth = async () => {
       </div>
     );
   }
+
 
   // Server Creation Step
   if (step === 'server-creation') {
