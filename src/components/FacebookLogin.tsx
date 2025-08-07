@@ -26,9 +26,10 @@ interface Server {
 
 interface FacebookLoginProps {
   onServerSelected: (serverId: string, businessId: string, serverData: any) => void;
+  initialAuthData?: any;
 }
 
-const FacebookLogin: React.FC<FacebookLoginProps> = ({ onServerSelected }) => {
+const FacebookLogin: React.FC<FacebookLoginProps> = ({ onServerSelected, initialAuthData }) => {
   const [step, setStep] = useState<'login' | 'server-creation' | 'business-selection'>('login');
   const [isLoading, setIsLoading] = useState(false);
   const [selectedBusiness, setSelectedBusiness] = useState<string>('');
@@ -45,6 +46,21 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({ onServerSelected }) => {
   const [isCreatingServer, setIsCreatingServer] = useState(false);
   const [servers, setServers] = useState<Server[]>([]);
   const [selectedServer, setSelectedServer] = useState<string>('');
+
+  useEffect(() => {
+    if (initialAuthData) {
+      console.log('Received initial auth data from callback:', initialAuthData);
+      
+      setCurrentUser(initialAuthData.user);
+      setUserSession(initialAuthData.session);
+      setFacebookAccessToken(initialAuthData.facebookToken || initialAuthData.session?.provider_token);
+      
+      // Skip directly to server creation step
+      loadUserServers(initialAuthData.user.id).then(() => {
+        setStep('server-creation');
+      });
+    }
+  }, [initialAuthData]);
 
   useEffect(() => {
     let mounted = true;
@@ -262,33 +278,41 @@ const fetchAndSaveBusinessAccounts = async (token: string, userId: string) => {
     }
   };
 
-  // Replace your handleFacebookLogin function with this:
-const handleFacebookLogin = async () => {
-  setIsLoading(true);
-  setError('');
+  const handleFacebookLogin = async () => {
+    setIsLoading(true);
+    setError('');
 
-  try {
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: 'facebook',
-      options: {
-        scopes: 'email pages_read_engagement pages_manage_posts pages_show_list business_management ads_management ads_read',
-        redirectTo: `${window.location.origin}/auth/callback`, // More specific redirect
-        queryParams: {
-          access_type: 'offline',
-          prompt: 'consent',
+    try {
+      // Get the correct redirect URL - always use the callback route
+      const baseUrl = window.location.origin;
+      const redirectUrl = `${baseUrl}/auth/callback`;
+      
+      console.log('OAuth redirect URL:', redirectUrl);
+
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'facebook',
+        options: {
+          scopes: 'email pages_read_engagement pages_manage_posts pages_show_list business_management ads_management ads_read',
+          redirectTo: redirectUrl, // Always redirect to callback route
+          queryParams: {
+            access_type: 'offline',
+            prompt: 'consent',
+          }
         }
-      }
-    });
+      });
 
-    if (error) {
-      throw error;
+      if (error) {
+        throw error;
+      }
+
+      // OAuth redirect will happen automatically to /auth/callback
+      
+    } catch (err) {
+      console.error('Facebook OAuth error:', err);
+      setError(`Facebook login failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      setIsLoading(false);
     }
-  } catch (err) {
-    console.error('Facebook OAuth error:', err);
-    setError(`Facebook login failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
-    setIsLoading(false);
-  }
-};
+  };
 
 const exchangeTokenAndSaveUser = async (providerToken: string, facebookData: any, supabaseUser: any) => {
   try {
@@ -825,7 +849,7 @@ const testServerHealth = async () => {
               {isLoading ? (
                 <>
                   <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                  <span>Connecting...</span>
+                  <span>Redirecting to Facebook...</span>
                 </>
               ) : (
                 <>
@@ -846,12 +870,12 @@ const testServerHealth = async () => {
             </div>
 
             <div className="mt-6 bg-blue-50 rounded-lg p-4">
-              <h3 className="text-sm font-medium text-blue-900 mb-2">Required Permissions:</h3>
+              <h3 className="text-sm font-medium text-blue-900 mb-2">What happens next:</h3>
               <ul className="text-xs text-blue-800 space-y-1">
-                <li>• Access to your business accounts</li>
-                <li>• Read and manage your ad accounts</li>
-                <li>• Access to your Facebook pages</li>
-                <li>• Create and manage advertisements</li>
+                <li>• You'll be redirected to Facebook to authorize</li>
+                <li>• We'll securely exchange your tokens</li>
+                <li>• You'll be brought back to create your MCP server</li>
+                <li>• Then select your business account</li>
               </ul>
             </div>
           </div>
