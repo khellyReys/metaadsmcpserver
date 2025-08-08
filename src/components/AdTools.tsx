@@ -31,6 +31,7 @@ const AdTools: React.FC<AdToolsProps> = ({ businessId, secret }) => {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [tools, setTools] = useState<McpTool[]>([]);
+  const [loadingTools, setLoadingTools] = useState(true);
   const [sessionPath, setSessionPath] = useState<string>();
   const [connecting, setConnecting] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -47,55 +48,62 @@ const AdTools: React.FC<AdToolsProps> = ({ businessId, secret }) => {
   // Load tools effect
   useEffect(() => {
     async function loadTools() {
+      setLoadingTools(true);
       const loaded: McpTool[] = [];
       const seen = new Set<string>();
       
-      for (const path of toolPaths) {
-        try {
-          const mod = await import(`../../tools/${path}`);
-          const def = mod.apiTool?.definition?.function;
-          if (def?.name && def?.description && !seen.has(def.name)) {
-            seen.add(def.name);
-            
-            // STEP 3: Smart Category Detection
-            let category = 'General'; // Default fallback
-            const name = def.name.toLowerCase(); // Convert to lowercase for easier matching
-            
-            // STEP 4: Pattern Matching Logic
-            // Check for specific keywords in the tool name
-            if (name.includes('campaign')) {
-              category = 'Campaigns';
-            } else if (name.includes('adset')) {
-              category = 'Ad Sets';
-            } else if (name.includes('ad') && !name.includes('campaign')) {
-              // This catches "ad" but excludes "campaign" to avoid double-matching
-              category = 'Ads';
-            } else if (name.includes('conversion') || name.includes('attribution')) {
-              category = 'Analytics';
-            } else if (name.includes('report') || name.includes('insight')) {
-              category = 'Reporting';
-            } else if (name.includes('creative') || name.includes('image')) {
-              category = 'Creative';
-            } else if (name.includes('audience') || name.includes('targeting')) {
-              category = 'Targeting';
-            } else if (name.includes('bid') || name.includes('budget')) {
-              category = 'Optimization';
+      try {
+        for (const path of toolPaths) {
+          try {
+            const mod = await import(`../../tools/${path}`);
+            const def = mod.apiTool?.definition?.function;
+            if (def?.name && def?.description && !seen.has(def.name)) {
+              seen.add(def.name);
+              
+              // STEP 3: Smart Category Detection
+              let category = 'General'; // Default fallback
+              const name = def.name.toLowerCase(); // Convert to lowercase for easier matching
+              
+              // STEP 4: Pattern Matching Logic
+              // Check for specific keywords in the tool name
+              if (name.includes('campaign')) {
+                category = 'Campaigns';
+              } else if (name.includes('adset')) {
+                category = 'Ad Sets';
+              } else if (name.includes('ad') && !name.includes('campaign')) {
+                // This catches "ad" but excludes "campaign" to avoid double-matching
+                category = 'Ads';
+              } else if (name.includes('conversion') || name.includes('attribution')) {
+                category = 'Analytics';
+              } else if (name.includes('report') || name.includes('insight')) {
+                category = 'Reporting';
+              } else if (name.includes('creative') || name.includes('image')) {
+                category = 'Creative';
+              } else if (name.includes('audience') || name.includes('targeting')) {
+                category = 'Targeting';
+              } else if (name.includes('bid') || name.includes('budget')) {
+                category = 'Optimization';
+              }
+              
+              loaded.push({
+                id: `${def.name}:${path}`,
+                name: def.name,
+                description: def.description,
+                // STEP 5: Priority System
+                // 1. Use explicit category from tool file (if exists)
+                // 2. Use our auto-detected category
+                category: mod.apiTool.definition.function.category || category,
+                parameters: def.parameters || undefined,
+              });
             }
-            
-            loaded.push({
-              id: `${def.name}:${path}`,
-              name: def.name,
-              description: def.description,
-              // STEP 5: Priority System
-              // 1. Use explicit category from tool file (if exists)
-              // 2. Use our auto-detected category
-              category: mod.apiTool.definition.function.category || category,
-              parameters: def.parameters || undefined,
-            });
-          }
-        } catch {}
+          } catch {}
+        }
+      } catch (error) {
+        console.error('Error loading tools:', error);
+      } finally {
+        setTools(loaded);
+        setLoadingTools(false);
       }
-      setTools(loaded);
     }
     loadTools();
   }, []);
@@ -367,6 +375,30 @@ const getReadableOutput = (resp: any) => {
   }
 };
 
+  // Loading Progress Component
+  const LoadingProgress = () => (
+    <div className="flex flex-col items-center justify-center py-12 sm:py-20">
+      <div className="relative w-20 h-20 mb-6">
+        <div className="absolute inset-0 border-4 border-gray-200 rounded-full"></div>
+        <div className="absolute inset-0 border-4 border-blue-600 rounded-full border-t-transparent animate-spin"></div>
+        <div className="absolute inset-4 bg-blue-50 rounded-full flex items-center justify-center">
+          <Settings className="w-6 h-6 text-blue-600 animate-pulse" />
+        </div>
+      </div>
+      <div className="text-center space-y-2">
+        <h3 className="text-lg sm:text-xl font-semibold text-gray-900">Loading Available Tools</h3>
+        <p className="text-gray-600 text-sm sm:text-base max-w-md px-4">
+          Discovering and configuring tools for your Meta Ads account...
+        </p>
+      </div>
+      <div className="mt-6 flex items-center gap-2 text-sm text-gray-500">
+        <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce"></div>
+        <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
+        <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
+      </div>
+    </div>
+  );
+
 
 
   return (
@@ -433,6 +465,7 @@ const getReadableOutput = (resp: any) => {
                 value={searchTerm} 
                 onChange={e=>setSearchTerm(e.target.value)} 
                 className="w-full pl-10 pr-4 py-3 bg-white border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900 font-medium shadow-sm" 
+                disabled={loadingTools}
               />
             </div>
           </div>
@@ -603,78 +636,86 @@ const getReadableOutput = (resp: any) => {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-3 sm:px-4 md:px-6 py-4 sm:py-6 md:py-8">
-        {/* Category Filters - Horizontal scroll on mobile */}
-        <div className="mb-6 sm:mb-8">
-          <div className="flex gap-2 sm:gap-3 overflow-x-auto pb-2 -mx-3 px-3 sm:mx-0 sm:px-0">
-            {categories.map(cat=>(
-              <button 
-                key={cat} 
-                onClick={()=>setSelectedCategory(cat)} 
-                className={`px-3 py-2 rounded-xl font-medium whitespace-nowrap transition-all shadow-sm text-sm ${
-                selectedCategory===cat
-                    ? 'bg-gradient-to-r from-blue-600 to-purple-700 text-white shadow-lg transform scale-105' 
-                    : 'bg-white border-2 border-gray-200 hover:border-blue-300 hover:bg-blue-50 text-gray-700 hover:text-blue-700'
-                }`}
-              > 
-                {cat} 
-              </button>
-            ))}
-          </div>
-        </div>
+        {/* Loading State */}
+        {loadingTools && <LoadingProgress />}
 
-        {/* Error Display - Mobile Optimized */}
-        {error && (
-          <div className="mb-6 sm:mb-8 p-4 sm:p-5 bg-red-50 border-2 border-red-200 text-red-800 rounded-xl sm:rounded-2xl flex items-start gap-3 sm:gap-4 shadow-sm">
-            <div className="w-8 h-8 sm:w-10 sm:h-10 bg-red-100 rounded-xl flex items-center justify-center flex-shrink-0">
-              <AlertCircle className="w-4 h-4 sm:w-5 sm:h-5 text-red-600" />
-            </div>
-            <span className="font-medium text-sm sm:text-base">{error}</span>
-          </div>
-        )}
-
-        {/* Tools Grid - Responsive */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
-          {filtered.map(tool=>(
-            <div 
-              key={`${tool.name}:${tool.id}`} 
-              className="bg-white border-2 border-gray-100 rounded-xl sm:rounded-2xl p-4 sm:p-5 hover:border-blue-200 hover:shadow-xl transition-all transform hover:scale-105 shadow-sm"
-            >
-              <div className="flex items-start justify-between mb-3 sm:mb-4">
-                <div className="w-8 h-8 sm:w-10 sm:h-10 bg-gray-100 rounded-xl flex items-center justify-center flex-shrink-0">
-                  <Settings className="w-4 h-4 sm:w-5 sm:h-5 text-gray-600" />
-                </div>
-                <span className="text-xs px-2 py-1 bg-gray-100 text-gray-700 rounded-full font-medium ml-2">
-                  {tool.category}
-                </span>
+        {/* Tools Content - Only show when not loading */}
+        {!loadingTools && (
+          <>
+            {/* Category Filters - Horizontal scroll on mobile */}
+            <div className="mb-6 sm:mb-8">
+              <div className="flex gap-2 sm:gap-3 overflow-x-auto pb-2 -mx-3 px-3 sm:mx-0 sm:px-0">
+                {categories.map(cat=>(
+                  <button 
+                    key={cat} 
+                    onClick={()=>setSelectedCategory(cat)} 
+                    className={`px-3 py-2 rounded-xl font-medium whitespace-nowrap transition-all shadow-sm text-sm ${
+                    selectedCategory===cat
+                        ? 'bg-gradient-to-r from-blue-600 to-purple-700 text-white shadow-lg transform scale-105' 
+                        : 'bg-white border-2 border-gray-200 hover:border-blue-300 hover:bg-blue-50 text-gray-700 hover:text-blue-700'
+                    }`}
+                  > 
+                    {cat} 
+                  </button>
+                ))}
               </div>
-              <h3 className="font-bold text-base sm:text-lg text-gray-900 mb-2 line-clamp-2">
-                {tool.name}
-              </h3>
-              <p className="text-sm text-gray-600 mb-4 sm:mb-5 line-clamp-3 leading-relaxed">
-                {tool.description}
-              </p>
-              <button 
-                onClick={()=>openToolDialog(tool)} 
-                disabled={!sessionPath} 
-                className="w-full px-3 sm:px-4 py-2.5 bg-blue-300 hover:bg-gradient-to-r hover:from-blue-600 hover:to-purple-700 text-white rounded-xl font-medium disabled:opacity-50 flex items-center justify-center gap-2 transition-all shadow-sm hover:shadow-lg text-sm"
-              >
-                <Play className="w-4 h-4" />
-                <span className="hidden sm:inline">Configure & Run</span>
-                <span className="sm:hidden">Run Tool</span>
-              </button>
             </div>
-          ))}
-        </div>
 
-        {/* Empty State - Mobile Optimized */}
-        {filtered.length === 0 && !connecting && (
-          <div className="text-center py-12 sm:py-20">
-            <div className="w-16 h-16 sm:w-20 sm:h-20 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4 sm:mb-6">
-              <Search className="w-8 h-8 sm:w-10 sm:h-10 text-gray-400" />
+            {/* Error Display - Mobile Optimized */}
+            {error && (
+              <div className="mb-6 sm:mb-8 p-4 sm:p-5 bg-red-50 border-2 border-red-200 text-red-800 rounded-xl sm:rounded-2xl flex items-start gap-3 sm:gap-4 shadow-sm">
+                <div className="w-8 h-8 sm:w-10 sm:h-10 bg-red-100 rounded-xl flex items-center justify-center flex-shrink-0">
+                  <AlertCircle className="w-4 h-4 sm:w-5 sm:h-5 text-red-600" />
+                </div>
+                <span className="font-medium text-sm sm:text-base">{error}</span>
+              </div>
+            )}
+
+            {/* Tools Grid - Responsive */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
+              {filtered.map(tool=>(
+                <div 
+                  key={`${tool.name}:${tool.id}`} 
+                  className="bg-white border-2 border-gray-100 rounded-xl sm:rounded-2xl p-4 sm:p-5 hover:border-blue-200 hover:shadow-xl transition-all transform hover:scale-105 shadow-sm"
+                >
+                  <div className="flex items-start justify-between mb-3 sm:mb-4">
+                    <div className="w-8 h-8 sm:w-10 sm:h-10 bg-gray-100 rounded-xl flex items-center justify-center flex-shrink-0">
+                      <Settings className="w-4 h-4 sm:w-5 sm:h-5 text-gray-600" />
+                    </div>
+                    <span className="text-xs px-2 py-1 bg-gray-100 text-gray-700 rounded-full font-medium ml-2">
+                      {tool.category}
+                    </span>
+                  </div>
+                  <h3 className="font-bold text-base sm:text-lg text-gray-900 mb-2 line-clamp-2">
+                    {tool.name}
+                  </h3>
+                  <p className="text-sm text-gray-600 mb-4 sm:mb-5 line-clamp-3 leading-relaxed">
+                    {tool.description}
+                  </p>
+                  <button 
+                    onClick={()=>openToolDialog(tool)} 
+                    disabled={!sessionPath} 
+                    className="w-full px-3 sm:px-4 py-2.5 bg-blue-300 hover:bg-gradient-to-r hover:from-blue-600 hover:to-purple-700 text-white rounded-xl font-medium disabled:opacity-50 flex items-center justify-center gap-2 transition-all shadow-sm hover:shadow-lg text-sm"
+                  >
+                    <Play className="w-4 h-4" />
+                    <span className="hidden sm:inline">Configure & Run</span>
+                    <span className="sm:hidden">Run Tool</span>
+                  </button>
+                </div>
+              ))}
             </div>
-            <p className="text-gray-600 text-lg sm:text-xl font-semibold mb-2 px-4">No tools found matching your search</p>
-            <p className="text-gray-500 text-base sm:text-lg px-4">Try adjusting your search terms or category filter</p>
-          </div>
+
+            {/* Empty State - Mobile Optimized */}
+            {filtered.length === 0 && !connecting && (
+              <div className="text-center py-12 sm:py-20">
+                <div className="w-16 h-16 sm:w-20 sm:h-20 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4 sm:mb-6">
+                  <Search className="w-8 h-8 sm:w-10 sm:h-10 text-gray-400" />
+                </div>
+                <p className="text-gray-600 text-lg sm:text-xl font-semibold mb-2 px-4">No tools found matching your search</p>
+                <p className="text-gray-500 text-base sm:text-lg px-4">Try adjusting your search terms or category filter</p>
+              </div>
+            )}
+          </>
         )}
       </main>
     </div>
