@@ -334,7 +334,7 @@ const ServerManagementStep: React.FC<ServerManagementStepProps> = ({
               </div>
             </div>
           )}
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Your MCP Servers</h1>
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">Your Servers</h1>
           <p className="text-gray-600">Create and manage your Facebook ads automation servers</p>
         </div>
 
