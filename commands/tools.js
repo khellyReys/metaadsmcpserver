@@ -7,12 +7,9 @@ export function registerToolsCommand(program) {
     .action(async () => {
       const tools = await discoverTools();
       if (tools.length === 0) {
-        console.log("No tools found. Tools should be organized as:");
-        console.log("tools/workspace/collection/request.js\n");
         return;
       }
 
-      console.log("\nAvailable Tools:\n");
 
       // Group tools by workspace/collection
       const groupedTools = tools.reduce((acc, tool) => {
@@ -30,36 +27,22 @@ export function registerToolsCommand(program) {
 
       // Print tools in a hierarchical structure
       for (const [workspace, collections] of Object.entries(groupedTools)) {
-        console.log(`Workspace: ${workspace}`);
         for (const [collection, tools] of Object.entries(collections)) {
-          console.log(`  Collection: ${collection}`);
           tools.forEach(
             ({
               definition: {
                 function: { name, description, parameters },
               },
             }) => {
-              console.log(`    ${name}`);
-              console.log(
-                `      Description: ${description || "No description provided"}`
-              );
               if (parameters?.properties) {
-                console.log("      Parameters:");
                 Object.entries(parameters.properties).forEach(
                   ([name, details]) => {
-                    console.log(
-                      `        - ${name}: ${
-                        details.description || "No description"
-                      }`
-                    );
                   }
                 );
               }
-              console.log("");
             }
           );
         }
-        console.log("");
       }
     });
 }

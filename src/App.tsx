@@ -7,16 +7,16 @@ import APISection from './components/APISection';
 import Stats from './components/Stats';
 import Pricing from './components/Pricing';
 import Footer from './components/Footer';
-import FacebookLogin from './components/FacebookLogin'; // This now references your refactored component
-import OAuthCallback from './components/OAuthCallback';
 import AdTools from './components/AdTools';
+import Dashboard from './components/Dashboard'; // Import the standalone Dashboard component
+import authService from './auth/authService';
 
 // Landing page component that uses proper navigation
 const LandingPage = () => {
   const navigate = useNavigate();
   
   const handleGetStarted = () => {
-    navigate('/login');
+    navigate('/dashboard');
   };
 
   return (
@@ -32,6 +32,41 @@ const LandingPage = () => {
   );
 };
 
+// Auth callback component for OAuth redirects
+const AuthCallback = () => {
+  const navigate = useNavigate();
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    const handleAuthCallback = async () => {
+      try {
+        // Supabase automatically handles the OAuth callback
+        // Just redirect to dashboard and let it handle the session
+        navigate('/dashboard');
+      } catch (error) {
+        navigate('/dashboard');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    handleAuthCallback();
+  }, [navigate]);
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-white to-purple-50">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-600 mx-auto"></div>
+          <p className="mt-4 text-gray-600">Processing authentication...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return null;
+};
+
 // Main app wrapper component
 const AppContent = () => {
   const [selectedBusinessId, setSelectedBusinessId] = useState<string>('');
@@ -42,26 +77,25 @@ const AppContent = () => {
 
   // Debug: Log current location
   useEffect(() => {
-    console.log('Current route:', location.pathname);
   }, [location]);
 
   const handleBusinessSelected = (serverId: string, businessId: string, serverData?: any) => {
-    // Updated to match your new component's interface
     setSelectedBusinessId(businessId);
-    setMcpSecret(serverId); // Using serverId as the secret/identifier
+    setMcpSecret(serverId);
     setAuthData(serverData);
-    navigate('/tools');
+    navigate('/workspace');
   };
 
-  const handleAuthComplete = (userData: any) => {
-    console.log('Auth completed with user data:', userData);
-    setAuthData(userData);
-    navigate('/login');
-  };
-
-  const handleAuthError = (error: string) => {
-    console.error('Auth error:', error);
+  const handleLogout = () => {
+    
+    // Use auth service to logout
+    authService.logout();
+    
+    // Clear business selection state
+    setSelectedBusinessId('');
+    setMcpSecret('');
     setAuthData(null);
+    
     navigate('/');
   };
 
@@ -70,43 +104,42 @@ const AppContent = () => {
       {/* Landing page */}
       <Route path="/" element={<LandingPage />} />
       
-      {/* OAuth callback route */}
+      {/* Dashboard route - Server Management */}
       <Route 
-        path="/auth/callback" 
+        path="/dashboard" 
         element={
-          <OAuthCallback 
-            onAuthComplete={handleAuthComplete}
-            onError={handleAuthError}
+          <Dashboard
+            onServerSelected={handleBusinessSelected}
+            authData={authData}
+            setAuthData={setAuthData}
           />
         } 
       />
       
-      {/* Login route */}
+      {/* Workspace route - Ad Tools */}
       <Route 
-        path="/login" 
-        element={
-          <FacebookLogin 
-            onServerSelected={handleBusinessSelected} 
-            initialAuthData={authData}
-          />
-        } 
-      />
-      
-      {/* Tools route */}
-      <Route 
-        path="/tools" 
+        path="/workspace" 
         element={
           selectedBusinessId ? (
             <AdTools
               businessId={selectedBusinessId}
               secret={mcpSecret}
               mcpServerLink={import.meta.env.VITE_MCP_SERVER_URL || "https://localhost:3000"}
+              onLogout={handleLogout}
             />
           ) : (
-            <Navigate to="/login" replace />
+            <Navigate to="/dashboard" replace />
           )
         } 
       />
+      
+      {/* Auth callback route for OAuth */}
+      <Route path="/auth/callback" element={<AuthCallback />} />
+      
+      {/* Legacy routes - redirect to new structure */}
+      <Route path="/login" element={<Navigate to="/dashboard" replace />} />
+      <Route path="/auth" element={<Navigate to="/dashboard" replace />} />
+      <Route path="/tools" element={<Navigate to="/workspace" replace />} />
       
       {/* Catch all route */}
       <Route path="*" element={<Navigate to="/" replace />} />

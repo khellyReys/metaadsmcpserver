@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo } from "react";
-import { Copy, Search, Play, Zap, AlertCircle, CheckCircle2, Loader, X, Settings, Terminal } from "lucide-react";
+import React, { useState, useEffect, useMemo, useRef  } from "react";
+import { Copy, Search, Play, ArrowLeft, AlertCircle, CheckCircle2, Loader, X, Settings, Terminal } from "lucide-react";
 // @ts-ignore
 import { toolPaths } from '../../public/tools/paths.js';
 
@@ -39,32 +39,67 @@ const AdTools: React.FC<AdToolsProps> = ({ businessId, secret }) => {
   const [parameterValues, setParameterValues] = useState<Record<string, string>>({});
   const [toolResponse, setToolResponse] = useState<any>(null);
   const [executionError, setExecutionError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const esRef = useRef<EventSource | null>(null);
+  const pendingRef = useRef<Map<number, (msg: any) => void>>(new Map());
 
   // Load tools effect
   useEffect(() => {
     async function loadTools() {
       const loaded: McpTool[] = [];
       const seen = new Set<string>();
+      
       for (const path of toolPaths) {
         try {
-          // const mod = await import(`../../tools/${path}`);
-          // const def = mod.apiTool?.definition?.function;
-          // if (def?.name && def?.description && !seen.has(def.name)) {
-          //   seen.add(def.name);
-          //   loaded.push({
-          //     id: `${def.name}:${path}`,
-          //     name: def.name,
-          //     description: def.description,
-          //     category: mod.apiTool.definition.function.category || "Uncategorized",
-          //     parameters: def.parameters || undefined,
-          //   });
-          // }
+          const mod = await import(`../../tools/${path}`);
+          const def = mod.apiTool?.definition?.function;
+          if (def?.name && def?.description && !seen.has(def.name)) {
+            seen.add(def.name);
+            
+            // STEP 3: Smart Category Detection
+            let category = 'General'; // Default fallback
+            const name = def.name.toLowerCase(); // Convert to lowercase for easier matching
+            
+            // STEP 4: Pattern Matching Logic
+            // Check for specific keywords in the tool name
+            if (name.includes('campaign')) {
+              category = 'Campaigns';
+            } else if (name.includes('adset')) {
+              category = 'Ad Sets';
+            } else if (name.includes('ad') && !name.includes('campaign')) {
+              // This catches "ad" but excludes "campaign" to avoid double-matching
+              category = 'Ads';
+            } else if (name.includes('conversion') || name.includes('attribution')) {
+              category = 'Analytics';
+            } else if (name.includes('report') || name.includes('insight')) {
+              category = 'Reporting';
+            } else if (name.includes('creative') || name.includes('image')) {
+              category = 'Creative';
+            } else if (name.includes('audience') || name.includes('targeting')) {
+              category = 'Targeting';
+            } else if (name.includes('bid') || name.includes('budget')) {
+              category = 'Optimization';
+            }
+            
+            loaded.push({
+              id: `${def.name}:${path}`,
+              name: def.name,
+              description: def.description,
+              // STEP 5: Priority System
+              // 1. Use explicit category from tool file (if exists)
+              // 2. Use our auto-detected category
+              category: mod.apiTool.definition.function.category || category,
+              parameters: def.parameters || undefined,
+            });
+          }
         } catch {}
       }
       setTools(loaded);
     }
     loadTools();
   }, []);
+  
 
   // Filters
   const categories = useMemo(() => ["All", ...Array.from(new Set(tools.map(t => t.category))).sort()], [tools]);
@@ -77,44 +112,187 @@ const AdTools: React.FC<AdToolsProps> = ({ businessId, secret }) => {
   // SSE URL & handshake
   const sseUrl = useMemo(() => `${MCP_BASE_URL}/sse?token=${btoa(`${businessId}:${secret}`)}`, [businessId, secret]);
   useEffect(() => {
+    // Close any previous connection first
+    esRef.current?.close();
+  
     setConnecting(true);
     setError(null);
     setSessionPath(undefined);
+  
     const es = new EventSource(sseUrl);
-    es.addEventListener("endpoint", (e: MessageEvent) => {
-      setSessionPath(e.data);
+    esRef.current = es;
+  
+    const onEndpoint = (e: MessageEvent) => {
+      // e.data like "/messages?sessionId=..."
+      setSessionPath(e.data as string);
       setConnecting(false);
-      es.close();
-    });
-    es.onerror = () => {
-      setError("Failed to connect to SSE.");
-      setConnecting(false);
-      es.close();
     };
-    return () => es.close();
+  
+    const onMessage = (e: MessageEvent) => {
+      try {
+        const msg = JSON.parse(e.data as string);
+        if (msg && typeof (msg as any).id !== "undefined") {
+          const fn = pendingRef.current.get((msg as any).id);
+          if (fn) {
+            pendingRef.current.delete((msg as any).id);
+            fn(msg);
+          }
+        }
+      } catch {
+        // ignore non-JSON/keepalive lines
+      }
+    };
+  
+    es.addEventListener("endpoint", onEndpoint);
+    es.addEventListener("message", onMessage);
+  
+    es.onopen = () => {
+      setConnecting(false);
+      setError(null);
+    };
+  
+    es.onerror = () => {
+      setError("SSE disconnected. Reconnecting…");
+      setConnecting(true);
+    };
+  
+    return () => {
+      es.removeEventListener("endpoint", onEndpoint);
+      es.removeEventListener("message", onMessage);
+      es.close();
+      esRef.current = null;
+    };
   }, [sseUrl]);
+  
+
 
   // Helpers: copy, callTool, open/close dialog, handle params
-  const copyToClipboard = (txt: string) => () => navigator.clipboard.writeText(txt);
+  const copyToClipboard = (txt: string) => async () => {
+    try {
+      await navigator.clipboard.writeText(txt);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+  const postRpc = async (body: any) => {
+    const doPost = async (path: string) => {
+      const res = await fetch(`${MCP_BASE_URL}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+  
+      // 202 Accepted => response will arrive via SSE, not this HTTP response
+      if (res.status === 202) {
+        return { status: "accepted" };
+      }
+  
+      // 200 OK with JSON (some servers may do this)
+      if (res.ok) {
+        const ct = res.headers.get("content-type") || "";
+        if (ct.includes("application/json")) return res.json();
+        const raw = await res.text().catch(() => "");
+        if (!raw || raw.toLowerCase().includes("accepted")) {
+          return { status: "accepted" };
+        }
+        // Unexpected non-JSON success body
+        return { status: "ok", raw };
+      }
+  
+      // Try to read and parse any error body
+      const raw = await res.text().catch(() => "");
+      let j: any = null;
+      try { j = raw ? JSON.parse(raw) : null; } catch {}
+  
+      // A) Dead session -> server suggests a live one
+      if (res.status === 400 && j?.availableSessions?.length) {
+        const fresh = `/messages?sessionId=${j.availableSessions[0]}`;
+        setSessionPath(fresh);
+        const retry = await fetch(`${MCP_BASE_URL}${fresh}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (retry.status === 202) return { status: "accepted" };
+        if (retry.ok) return retry.json();
+  
+        const retryRaw = await retry.text().catch(() => "");
+        let retryJson: any = null;
+        try { retryJson = retryRaw ? JSON.parse(retryRaw) : null; } catch {}
+        const retryMsg = retryJson?.error?.message || retryRaw || `status ${retry.status}`;
+        throw new Error(`Retry failed: ${retryMsg}`);
+      }
+  
+      // B) Proper MCP error payload
+      if (j?.error?.message) {
+        const code = j?.error?.code != null ? ` (code ${j.error.code})` : "";
+        throw new Error(`${j.error.message}${code}`);
+      }
+  
+      // Fallback: include raw body for debugging
+      throw new Error(`RPC failed: ${res.status}${raw ? ` - ${raw}` : ""}`);
+    };
+  
+    if (!sessionPath) throw new Error("No session");
+    return doPost(sessionPath);
+  };
+  
   const callTool = async (name: string, args: Record<string, any>) => {
     if (!sessionPath) return;
     setRunningTool(name);
     setToolResponse(null);
     setExecutionError(null);
-    try {
-      const res = await fetch(`${MCP_BASE_URL}${sessionPath}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", id: Date.now(), method: name, params: { arguments: args } }),
+  
+    // unique id for this JSON-RPC call
+    const id = Date.now();
+  
+    // Promise that resolves when SSE delivers the response with matching id
+    const waitForSse = new Promise<any>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        pendingRef.current.delete(id);
+        reject(new Error("Timed out waiting for tool response"));
+      }, 30000); // adjust if your tools take longer
+  
+      pendingRef.current.set(id, (msg) => {
+        clearTimeout(timeout);
+        resolve(msg);
       });
-      const result = await res.json();
-      setToolResponse(result);
+    });
+  
+    try {
+  
+      const postResult = await postRpc({
+        jsonrpc: "2.0",
+        id,
+        method: "tools/call",
+        params: { name, arguments: args },
+      });
+  
+      // If HTTP returned 202 Accepted, the real result will arrive via SSE
+      if (postResult && postResult.status === "accepted") {
+        const sseMsg = await waitForSse;
+        if (sseMsg?.error) {
+          throw new Error(sseMsg.error?.message || "Tool execution failed");
+        }
+        setToolResponse(sseMsg);
+      } else {
+        // Some servers may return JSON directly
+        setToolResponse(postResult);
+        pendingRef.current.delete(id); // avoid leak if SSE also sends something
+      }
     } catch (err) {
-      setExecutionError(err instanceof Error ? err.message : 'An error occurred');
+      pendingRef.current.delete(id);
+      setExecutionError(err instanceof Error ? err.message : "An error occurred");
     } finally {
       setRunningTool(null);
     }
   };
+  
+  
+  
   const openToolDialog = (tool: McpTool) => {
     setSelectedTool(tool);
     const initialValues: Record<string,string> = {};
@@ -129,123 +307,189 @@ const AdTools: React.FC<AdToolsProps> = ({ businessId, secret }) => {
   const handleParameterChange = (k:string, v:string) => setParameterValues(p => ({ ...p, [k]: v }));
   const executeToolWithParams = () => {
     if (!selectedTool) return;
+  
     const processed: Record<string, any> = {};
-    Object.entries(parameterValues).forEach(([k,v]) => {
-      const def = selectedTool.parameters?.properties[k];
-      if (def?.type === 'number') processed[k] = v ? Number(v) : undefined;
-      else if (def?.type === 'boolean') processed[k] = v === 'true';
-      else processed[k] = v || undefined;
+    const props = selectedTool.parameters?.properties || {};
+    const required = new Set(selectedTool.parameters?.required || []);
+  
+    Object.entries(props).forEach(([k, def]) => {
+      const raw = (parameterValues[k] ?? "").toString();
+  
+      if (def.type === "number") {
+        // keep the key; empty -> null, otherwise Number
+        processed[k] = raw.trim() === "" ? null : Number(raw);
+      } else if (def.type === "boolean") {
+        // always present; default false if empty
+        processed[k] = raw === "true";
+      } else {
+        // strings/other: keep empty string if user left it blank
+        processed[k] = raw;
+      }
+  
+      // Optional: trim strings if not required
+      if (typeof processed[k] === "string" && !required.has(k)) {
+        processed[k] = processed[k].trim();
+      }
     });
+  
     callTool(selectedTool.name, processed);
   };
+  
   const isFormValid = () => !selectedTool?.parameters || (selectedTool.parameters.required || []).every(r => parameterValues[r]?.trim());
+  
+  const handleBackToServers = () => {
+    // Navigate back to MCP Servers page
+    window.history.back(); // or use your router's navigation method
+  };
   const status = connecting ? {icon:Loader,text:'Connecting...',color:'text-yellow-600'}
                 : error ? {icon:AlertCircle,text:'Connection Failed',color:'text-red-600'}
                 : sessionPath ? {icon:CheckCircle2,text:'Connected',color:'text-green-600'}
                 : {icon:AlertCircle,text:'Disconnected',color:'text-gray-600'};
 
+const StatusIcon = status.icon;
+
+const getReadableOutput = (resp: any) => {
+  if (!resp) return "";
+
+  // SSE-delivered MCP result shape: { jsonrpc, id, result: { content: [{ type:"text", text:"..." }] } }
+  const sseText = resp?.result?.content?.find?.((c: any) => c?.type === "text")?.text;
+  if (typeof sseText === "string") return sseText;
+
+  // Direct JSON (non-SSE) fallback: sometimes servers return { content:[{type,text}] }
+  const directText = resp?.content?.find?.((c: any) => c?.type === "text")?.text;
+  if (typeof directText === "string") return directText;
+
+  // Nothing text-like? show JSON
+  try {
+    return JSON.stringify(resp, null, 2);
+  } catch {
+    return String(resp);
+  }
+};
+
+
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-100">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50">
       {/* Header */}
-      <header className="bg-white/90 backdrop-blur-md border-b border-white/30 sticky top-0 z-10 shadow-sm">
-        <div className="max-w-7xl mx-auto px-6 py-6 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
-          <div className="flex-1 space-y-3">
-            <div className="flex items-center gap-4">
-              <div className="p-3 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-2xl shadow-lg">
-                <Zap className="w-7 h-7 text-white" />
-              </div>
-              <div>
-                <h1 className="text-3xl font-bold bg-gradient-to-r from-gray-900 via-gray-800 to-gray-700 bg-clip-text text-transparent">
-                  MCP Tools Dashboard
-                </h1>
-                <p className="text-gray-600 text-sm mt-1">Manage and execute your MCP tools</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2 text-sm">
-              <span className="text-gray-500 font-medium">Business ID:</span>
-              <code className="px-3 py-1.5 bg-gray-100 rounded-lg text-gray-700 font-mono text-xs border">{businessId}</code>
-              <div className="flex items-center gap-2 ml-6 px-3 py-1.5 bg-white/60 rounded-lg border border-white/40">
-                <status.icon className={`w-4 h-4 ${status.color} ${connecting? 'animate-spin':''}`} />
-                <span className={`text-sm font-medium ${status.color}`}>{status.text}</span>
-              </div>
-            </div>
-          </div>
-          <div className="space-y-3 lg:max-w-md">
-            <div className="group relative flex items-center bg-white/80 backdrop-blur-sm rounded-xl border border-gray-200/60 overflow-hidden shadow-sm hover:shadow-md transition-all duration-200">
-              <input readOnly value={sseUrl} className="flex-1 p-3 text-xs font-mono text-gray-600 bg-transparent" />
-              <button onClick={copyToClipboard(sseUrl)} className="px-4 py-3 bg-blue-500 hover:bg-blue-600 text-white transition-colors">
-                <Copy className="w-4 h-4"/>
+      <header className="bg-white border-b shadow-sm sticky top-0 z-10">
+        <div className="max-w-7xl mx-auto px-3 sm:px-4 md:px-6 py-3 sm:py-4">
+          <div className="space-y-4">
+            {/* Title and Back Button Row */}
+            <div className="flex items-center gap-3">
+              <button 
+                onClick={handleBackToServers}
+                className="p-2 sm:p-2.5 bg-gradient-to-r from-blue-600 to-purple-700 rounded-xl hover:from-blue-700 hover:to-purple-800 transition-all shadow-lg hover:shadow-xl transform hover:scale-105 flex-shrink-0"
+              >
+                <ArrowLeft className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
               </button>
-            </div>
-            {sessionPath && (
-              <div className="group relative flex items-center bg-white/80 backdrop-blur-sm rounded-xl border border-gray-200/60 overflow-hidden shadow-sm hover:shadow-md transition-all duration-200">
-                <input readOnly value={`${MCP_BASE_URL}${sessionPath}`} className="flex-1 p-3 text-xs font-mono text-gray-600 bg-transparent" />
-                <button onClick={copyToClipboard(`${MCP_BASE_URL}${sessionPath}`)} className="px-4 py-3 bg-green-500 hover:bg-green-600 text-white transition-colors">
-                  <Copy className="w-4 h-4"/>
-                </button>
+              <div className="min-w-0 flex-1">
+                <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-gray-900 bg-gradient-to-r from-blue-600 to-purple-700 bg-clip-text text-transparent truncate">
+                  Available Tools
+                </h1>
               </div>
-            )}
+            </div>
+
+            {/* Connection Info - Mobile Optimized */}
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-6 text-sm">
+              {/* Server Link - Collapsible on mobile */}
+              <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 rounded-xl min-w-0">
+                <div className="w-2 h-2 bg-blue-600 rounded-full flex-shrink-0"></div>
+                <span className="text-gray-700 whitespace-nowrap">MCP Server:</span>
+                <div className="min-w-0 flex-1 max-w-xs sm:max-w-md">
+                  <div className="flex items-center border-2 border-gray-200 rounded-lg overflow-hidden shadow-sm bg-white hover:border-gray-300 transition-colors">
+                    <input 
+                      readOnly 
+                      value={sseUrl} 
+                      className="flex-1 p-2 text-xs font-mono text-gray-600 bg-gray-50 min-w-0" 
+                    />
+                    <button 
+                      onClick={copyToClipboard(sseUrl)} 
+                      className={`px-3 py-2 transition-all text-white flex-shrink-0 ${
+                        copied 
+                          ? 'bg-green-600 hover:bg-green-700' 
+                          : 'bg-gradient-to-r from-blue-600 to-purple-700 hover:from-blue-700 hover:to-purple-800'
+                      }`}
+                    >
+                      {copied ? <CheckCircle2 className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Status */}
+              <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 rounded-full w-fit">
+                <StatusIcon className={`w-4 h-4 ${status.color} ${connecting ? 'animate-spin' : ''} flex-shrink-0`} />
+                <span className={`text-sm font-semibold ${status.color} whitespace-nowrap`}>{status.text}</span>
+              </div>
+            </div>
+
+            {/* Search Bar - Full width on mobile */}
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
+              <input 
+                type="text" 
+                placeholder="Search tools..." 
+                value={searchTerm} 
+                onChange={e=>setSearchTerm(e.target.value)} 
+                className="w-full pl-10 pr-4 py-3 bg-white border-2 border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-gray-900 font-medium shadow-sm" 
+              />
+            </div>
           </div>
         </div>
       </header>
 
-      {/* Modal Portal */}
+      {/* Modal Portal - Mobile Optimized */}
       {selectedTool && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-6">
-          <div className="absolute inset-0 bg-gray-900/70 backdrop-blur-sm" onClick={closeToolDialog} />
-          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[75vh] overflow-hidden border border-white/20 flex flex-col">
-            {/* Modal Header */}
-            <div className="bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-700 px-6 py-4 text-white">
-              <div className="flex justify-between items-start">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-white/20 rounded-xl backdrop-blur-sm">
-                    <Settings className="w-5 h-5"/>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4">
+          <div className="absolute inset-0 bg-black bg-opacity-60" onClick={closeToolDialog} />
+          <div className="relative bg-white rounded-xl sm:rounded-2xl w-full max-w-2xl max-h-[95vh] sm:max-h-[90vh] flex flex-col shadow-2xl m-2 sm:mx-4">
+            {/* Modal Header - Mobile Optimized */}
+            <div className="bg-blue-600 px-4 sm:px-6 py-3 sm:py-4 text-white">
+              <div className="flex justify-between items-start gap-3">
+                <div className="flex items-center gap-3 min-w-0 flex-1">
+                  <div className="w-10 h-10 sm:w-12 sm:h-12 bg-white/20 rounded-xl flex items-center justify-center flex-shrink-0">
+                    <Settings className="w-5 h-5 sm:w-6 sm:h-6"/>
                   </div>
-                  <div>
-                    <h2 className="text-lg font-bold">{selectedTool.name}</h2>
-                    <p className="text-blue-100 text-xs mt-1 opacity-90 max-w-sm">{selectedTool.description}</p>
-                    <div className="mt-2">
-                      <span className="inline-block px-2 py-1 bg-white/20 rounded-full text-xs font-medium">
-                        {selectedTool.category}
-                      </span>
-                    </div>
+                  <div className="min-w-0 flex-1">
+                    <h2 className="text-lg sm:text-xl font-bold truncate">{selectedTool.name}</h2>
+                    <p className="text-blue-100 text-sm mt-1 line-clamp-2">{selectedTool.description}</p>
+                    <span className="inline-block px-2 sm:px-3 py-1 bg-white/20 rounded-full text-xs font-medium mt-2">
+                      {selectedTool.category}
+                    </span>
                   </div>
                 </div>
-                <button 
-                  onClick={closeToolDialog} 
-                  className="p-1.5 hover:bg-white/20 rounded-lg transition-colors"
-                >
-                  <X className="w-5 h-5"/>
+                <button onClick={closeToolDialog} className="p-2 hover:bg-white/20 rounded-xl transition-colors flex-shrink-0">
+                  <X className="w-5 h-5 sm:w-6 sm:h-6"/>
                 </button>
               </div>
             </div>
 
-            {/* Modal Content */}
+            {/* Modal Content - Scrollable */}
             <div className="flex-1 overflow-y-auto">
               {/* Parameters Section */}
-              <div className="p-6">
+              <div className="p-4 sm:p-6">
                 {selectedTool.parameters?.properties ? (
                   <>
-                    <div className="flex items-center gap-3 text-sm text-blue-700 bg-blue-50 px-4 py-3 rounded-xl border border-blue-200 mb-6">
-                      <AlertCircle className="w-4 h-4 text-blue-600" />
+                    <div className="flex items-start gap-3 text-sm text-blue-800 bg-blue-50 px-3 sm:px-4 py-3 rounded-xl mb-4 sm:mb-6 border border-blue-200">
+                      <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
                       <span className="font-medium">Configure the parameters below to execute this tool</span>
                     </div>
-                    <div className="grid gap-4">
+                    <div className="space-y-4 sm:space-y-6">
                       {Object.entries(selectedTool.parameters.properties).map(([k,def]) => {
                         const required = selectedTool.parameters?.required?.includes(k);
                         return (
-                          <div key={k} className="space-y-2">
-                            <div className="flex items-center justify-between">
-                              <label className="font-semibold text-gray-800 flex items-center gap-2 text-sm">
-                                {k}
-                                {required && <span className="text-red-500 text-xs">*</span>}
+                          <div key={k}>
+                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
+                              <label className="font-semibold text-gray-900 text-sm">
+                                {k} {required && <span className="text-red-500 ml-1">*</span>}
                               </label>
-                              <span className="text-xs font-mono px-2 py-1 bg-gray-100 rounded text-gray-600">
+                              <span className="text-xs bg-gray-100 px-3 py-1 rounded-full text-gray-700 font-medium w-fit">
                                 {def.type}
                               </span>
                             </div>
                             {def.description && (
-                              <p className="text-xs text-gray-600 bg-gray-50 px-3 py-2 rounded-lg border-l-2 border-blue-200">
+                              <p className="text-sm text-gray-600 mb-3 bg-gray-50 px-3 sm:px-4 py-2 rounded-lg">
                                 {def.description}
                               </p>
                             )}
@@ -253,7 +497,7 @@ const AdTools: React.FC<AdToolsProps> = ({ businessId, secret }) => {
                               <select 
                                 value={parameterValues[k]||'false'} 
                                 onChange={e=>handleParameterChange(k,e.target.value)} 
-                                className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-sm"
+                                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white text-base"
                               >
                                 <option value="false">False</option>
                                 <option value="true">True</option>
@@ -264,7 +508,7 @@ const AdTools: React.FC<AdToolsProps> = ({ businessId, secret }) => {
                                 value={parameterValues[k]||''} 
                                 onChange={e=>handleParameterChange(k,e.target.value)} 
                                 placeholder={`Enter ${k}...`} 
-                                className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-sm" 
+                                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white text-base" 
                                 required={required} 
                               />
                             )}
@@ -274,42 +518,39 @@ const AdTools: React.FC<AdToolsProps> = ({ businessId, secret }) => {
                     </div>
                   </>
                 ) : (
-                  <div className="text-center py-12">
-                    <div className="p-3 bg-blue-50 rounded-full w-16 h-16 mx-auto mb-4 flex items-center justify-center">
-                      <Settings className="w-8 h-8 text-blue-600"/>
+                  <div className="text-center py-8 sm:py-12">
+                    <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                      <Settings className="w-8 h-8 text-gray-400"/>
                     </div>
-                    <p className="text-gray-700 font-medium">No parameters required</p>
-                    <p className="text-gray-500 text-sm mt-1">This tool can be executed directly</p>
+                    <p className="text-gray-800 font-semibold text-lg">No parameters required</p>
+                    <p className="text-gray-500 text-sm mt-2">This tool can be executed directly</p>
                   </div>
                 )}
               </div>
 
               {/* Execution Logs Section */}
               {(toolResponse || executionError) && (
-                <div className="border-t border-gray-200 bg-gray-50">
-                  <div className="p-4">
-                    <div className="flex items-center gap-2 mb-3">
-                      <div className="p-1.5 bg-gray-700 rounded-lg">
+                <div className="border-t bg-gray-50">
+                  <div className="p-4 sm:p-6">
+                    <div className="flex items-center gap-3 mb-4">
+                      <div className="w-8 h-8 bg-gray-800 rounded-lg flex items-center justify-center">
                         <Terminal className="w-4 h-4 text-white" />
                       </div>
-                      <div>
-                        <h3 className="font-semibold text-gray-800 text-sm">Execution Log</h3>
-                        <p className="text-xs text-gray-600">Tool execution results and responses</p>
-                      </div>
-                      <div className={`ml-auto w-2.5 h-2.5 rounded-full ${executionError ? 'bg-red-500' : 'bg-green-500'}`} />
+                      <h3 className="font-semibold text-gray-900">Execution Log</h3>
+                      <div className={`ml-auto w-3 h-3 rounded-full ${executionError ? 'bg-red-500' : 'bg-green-500'} shadow-sm`} />
                     </div>
                     
-                    <div className="bg-gray-900 rounded-lg p-4 overflow-auto max-h-60">
+                    <div className="bg-gray-900 rounded-xl p-3 sm:p-5 overflow-auto max-h-40 sm:max-h-60 shadow-inner">
                       {executionError ? (
                         <div>
-                          <div className="text-red-400 text-xs font-medium mb-2">❌ Execution Error</div>
-                          <pre className="text-red-300 text-xs font-mono whitespace-pre-wrap">{executionError}</pre>
+                          <div className="text-red-400 text-sm mb-3 font-medium">❌ Execution Error</div>
+                          <pre className="text-red-300 text-xs sm:text-sm whitespace-pre-wrap break-words">{executionError}</pre>
                         </div>
                       ) : (
                         <div>
-                          <div className="text-green-400 text-xs font-medium mb-2">✅ Success</div>
-                          <pre className="text-gray-300 text-xs font-mono whitespace-pre-wrap">
-                            {JSON.stringify(toolResponse, null, 2)}
+                          <div className="text-green-400 text-sm mb-3 font-medium">✅ Success</div>
+                          <pre className="text-gray-300 text-xs sm:text-sm whitespace-pre-wrap break-words">
+                            {getReadableOutput(toolResponse)}
                           </pre>
                         </div>
                       )}
@@ -319,37 +560,41 @@ const AdTools: React.FC<AdToolsProps> = ({ businessId, secret }) => {
               )}
             </div>
 
-            {/* Modal Footer */}
-            <div className="px-6 py-4 bg-gray-50 flex justify-between items-center border-t border-gray-200">
-              <div className="text-xs text-gray-600">
-                {selectedTool.parameters?.required && selectedTool.parameters.required.length > 0 && (
-                  <span>* Required fields</span>
-                )}
-              </div>
-              <div className="flex gap-3">
-                <button 
-                  onClick={closeToolDialog} 
-                  className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors font-medium text-sm"
-                >
-                  Close
-                </button>
-                <button 
-                  onClick={executeToolWithParams} 
-                  disabled={!isFormValid() || runningTool === selectedTool.name} 
-                  className="px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:from-blue-700 hover:to-indigo-700 transition-all font-medium flex items-center gap-2 text-sm"
-                >
-                  {runningTool === selectedTool.name ? (
-                    <>
-                      <Loader className="w-3.5 h-3.5 animate-spin" />
-                      Executing...
-                    </>
-                  ) : (
-                    <>
-                      <Play className="w-3.5 h-3.5" />
-                      Execute Tool
-                    </>
+            {/* Modal Footer - Mobile Optimized */}
+            <div className="px-4 sm:px-6 py-4 sm:py-5 bg-gray-50 border-t flex-shrink-0">
+              <div className="flex flex-col sm:flex-row gap-3 sm:justify-between sm:items-center">
+                <div className="text-sm text-gray-600 order-2 sm:order-1">
+                  {selectedTool.parameters?.required && selectedTool.parameters.required.length > 0 && (
+                    <span className="font-medium">* Required fields</span>
                   )}
-                </button>
+                </div>
+                <div className="flex gap-3 order-1 sm:order-2">
+                  <button 
+                    onClick={closeToolDialog} 
+                    className="flex-1 sm:flex-none px-4 sm:px-6 py-2.5 border-2 border-gray-300 rounded-xl hover:bg-gray-50 text-gray-700 font-medium transition-colors"
+                  >
+                    Close
+                  </button>
+                  <button 
+                    onClick={executeToolWithParams} 
+                    disabled={!isFormValid() || runningTool === selectedTool.name} 
+                    className="flex-1 sm:flex-none px-4 sm:px-6 py-2.5 bg-gradient-to-r from-blue-600 to-purple-700 text-white rounded-xl disabled:opacity-50 hover:from-blue-700 hover:to-purple-800 flex items-center justify-center gap-2 font-semibold transition-all shadow-lg hover:shadow-xl text-sm"
+                  >
+                    {runningTool === selectedTool.name ? (
+                      <>
+                        <Loader className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" />
+                        <span className="hidden sm:inline">Executing...</span>
+                        <span className="sm:hidden">Running...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Play className="w-4 h-4 sm:w-5 sm:h-5" />
+                        <span className="hidden sm:inline">Execute Tool</span>
+                        <span className="sm:hidden">Execute</span>
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -357,28 +602,18 @@ const AdTools: React.FC<AdToolsProps> = ({ businessId, secret }) => {
       )}
 
       {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-6 py-8">
-        {/* Search and Filters */}
-        <div className="flex flex-col lg:flex-row gap-6 mb-8">
-          <div className="relative flex-1">
-            <Search className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
-            <input 
-              type="text" 
-              placeholder="Search tools by name or description..." 
-              value={searchTerm} 
-              onChange={e=>setSearchTerm(e.target.value)} 
-              className="w-full pl-12 pr-4 py-3 bg-white/80 backdrop-blur-sm border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all shadow-sm" 
-            />
-          </div>
-          <div className="flex gap-2 overflow-auto pb-2">
+      <main className="max-w-7xl mx-auto px-3 sm:px-4 md:px-6 py-4 sm:py-6 md:py-8">
+        {/* Category Filters - Horizontal scroll on mobile */}
+        <div className="mb-6 sm:mb-8">
+          <div className="flex gap-2 sm:gap-3 overflow-x-auto pb-2 -mx-3 px-3 sm:mx-0 sm:px-0">
             {categories.map(cat=>(
               <button 
                 key={cat} 
                 onClick={()=>setSelectedCategory(cat)} 
-                className={`px-4 py-2.5 rounded-xl font-medium transition-all whitespace-nowrap ${
-                  selectedCategory===cat
-                    ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30' 
-                    : 'bg-white/80 backdrop-blur-sm border border-gray-200 hover:bg-white hover:shadow-md text-gray-700'
+                className={`px-3 py-2 rounded-xl font-medium whitespace-nowrap transition-all shadow-sm text-sm ${
+                selectedCategory===cat
+                    ? 'bg-gradient-to-r from-blue-600 to-purple-700 text-white shadow-lg transform scale-105' 
+                    : 'bg-white border-2 border-gray-200 hover:border-blue-300 hover:bg-blue-50 text-gray-700 hover:text-blue-700'
                 }`}
               > 
                 {cat} 
@@ -387,55 +622,58 @@ const AdTools: React.FC<AdToolsProps> = ({ businessId, secret }) => {
           </div>
         </div>
 
-        {/* Error Display */}
+        {/* Error Display - Mobile Optimized */}
         {error && (
-          <div className="mb-6 p-4 bg-red-50 border border-red-200 text-red-700 rounded-xl flex items-center gap-3">
-            <AlertCircle className="w-5 h-5 text-red-600" />
-            {error}
+          <div className="mb-6 sm:mb-8 p-4 sm:p-5 bg-red-50 border-2 border-red-200 text-red-800 rounded-xl sm:rounded-2xl flex items-start gap-3 sm:gap-4 shadow-sm">
+            <div className="w-8 h-8 sm:w-10 sm:h-10 bg-red-100 rounded-xl flex items-center justify-center flex-shrink-0">
+              <AlertCircle className="w-4 h-4 sm:w-5 sm:h-5 text-red-600" />
+            </div>
+            <span className="font-medium text-sm sm:text-base">{error}</span>
           </div>
         )}
 
-        {/* Tools Grid */}
-        <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-6">
+        {/* Tools Grid - Responsive */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-6">
           {filtered.map(tool=>(
             <div 
               key={`${tool.name}:${tool.id}`} 
-              className="group p-6 bg-white/80 backdrop-blur-sm border border-gray-200/60 rounded-2xl hover:shadow-xl hover:shadow-blue-500/10 hover:border-blue-300/60 transition-all duration-300 hover:-translate-y-1"
+              className="bg-white border-2 border-gray-100 rounded-xl sm:rounded-2xl p-4 sm:p-5 hover:border-blue-200 hover:shadow-xl transition-all transform hover:scale-105 shadow-sm"
             >
-              <div className="flex items-start justify-between mb-4">
-                <div className="p-2 bg-gradient-to-r from-blue-100 to-indigo-100 rounded-xl group-hover:from-blue-200 group-hover:to-indigo-200 transition-colors">
-                  <Settings className="w-5 h-5 text-blue-600" />
+              <div className="flex items-start justify-between mb-3 sm:mb-4">
+                <div className="w-8 h-8 sm:w-10 sm:h-10 bg-gray-100 rounded-xl flex items-center justify-center flex-shrink-0">
+                  <Settings className="w-4 h-4 sm:w-5 sm:h-5 text-gray-600" />
                 </div>
-                <span className="text-xs px-3 py-1.5 bg-gray-100 text-gray-600 rounded-full font-medium">
+                <span className="text-xs px-2 py-1 bg-gray-100 text-gray-700 rounded-full font-medium ml-2">
                   {tool.category}
                 </span>
               </div>
-              <h3 className="font-bold text-lg text-gray-900 mb-2 group-hover:text-blue-600 transition-colors">
+              <h3 className="font-bold text-base sm:text-lg text-gray-900 mb-2 line-clamp-2">
                 {tool.name}
               </h3>
-              <p className="text-sm text-gray-600 mb-6 line-clamp-3 leading-relaxed">
+              <p className="text-sm text-gray-600 mb-4 sm:mb-5 line-clamp-3 leading-relaxed">
                 {tool.description}
               </p>
               <button 
                 onClick={()=>openToolDialog(tool)} 
                 disabled={!sessionPath} 
-                className="w-full px-4 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-xl text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:from-blue-700 hover:to-indigo-700 transition-all shadow-lg shadow-blue-600/30 hover:shadow-blue-600/40 flex items-center justify-center gap-2"
+                className="w-full px-3 sm:px-4 py-2.5 bg-blue-300 hover:bg-gradient-to-r hover:from-blue-600 hover:to-purple-700 text-white rounded-xl font-medium disabled:opacity-50 flex items-center justify-center gap-2 transition-all shadow-sm hover:shadow-lg text-sm"
               >
                 <Play className="w-4 h-4" />
-                Configure & Run
+                <span className="hidden sm:inline">Configure & Run</span>
+                <span className="sm:hidden">Run Tool</span>
               </button>
             </div>
           ))}
         </div>
 
-        {/* Empty State */}
+        {/* Empty State - Mobile Optimized */}
         {filtered.length === 0 && !connecting && (
-          <div className="text-center py-16">
-            <div className="p-4 bg-gray-100 rounded-full w-20 h-20 mx-auto mb-6 flex items-center justify-center">
-              <Search className="w-10 h-10 text-gray-400" />
+          <div className="text-center py-12 sm:py-20">
+            <div className="w-16 h-16 sm:w-20 sm:h-20 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4 sm:mb-6">
+              <Search className="w-8 h-8 sm:w-10 sm:h-10 text-gray-400" />
             </div>
-            <p className="text-gray-500 text-lg">No tools found matching your search</p>
-            <p className="text-gray-400 text-sm mt-2">Try adjusting your search terms or category filter</p>
+            <p className="text-gray-600 text-lg sm:text-xl font-semibold mb-2 px-4">No tools found matching your search</p>
+            <p className="text-gray-500 text-base sm:text-lg px-4">Try adjusting your search terms or category filter</p>
           </div>
         )}
       </main>

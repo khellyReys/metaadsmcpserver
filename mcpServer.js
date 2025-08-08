@@ -33,7 +33,6 @@ function validateToken(token) {
   try {
     // Decode the base64 token
     const decoded = Buffer.from(token, 'base64').toString('utf-8');
-    console.log("Decoded token:", decoded);
     
     // Add your token validation logic here
     // For example, check if it contains expected server ID and access token
@@ -100,7 +99,6 @@ async function setupServerHandlers(server, tools) {
         ],
       };
     } catch (err) {
-      console.error("[Tool Error]", err);
       throw new McpError(
         ErrorCode.InternalError,
         `Tool execution failed: ${err.message}`
@@ -131,7 +129,6 @@ async function run() {
     app.use(
       cors({
         origin: (incomingOrigin, callback) => {
-          console.log("Incoming origin:", incomingOrigin);
           
           // Allow requests with no origin (like mobile apps or curl)
           if (!incomingOrigin) {
@@ -142,7 +139,6 @@ async function run() {
           if (allowedOrigins.includes(incomingOrigin)) {
             callback(null, true);
           } else {
-            console.error(`Origin ${incomingOrigin} not allowed by CORS`);
             callback(new Error(`Origin ${incomingOrigin} not allowed by CORS`));
           }
         },
@@ -157,18 +153,21 @@ async function run() {
       })
     );
 
-    // Add body parser middleware
-    app.use(express.json());
+    app.use((req, res, next) => {
+      if (req.path === "/messages") {
+        next(); // skip JSON parsing
+      } else {
+        express.json()(req, res, next);
+      }
+    });
 
     // FIXED: SSE endpoint with token validation
     app.get("/sse", async (req, res) => {
-      console.log("SSE connection attempt with query:", req.query);
       
       try {
         // Validate token from query parameter
         const token = req.query.token;
         const tokenData = validateToken(token);
-        console.log("Token validated for server:", tokenData.serverId);
         
         // Set CORS headers explicitly for SSE
         res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
@@ -184,7 +183,6 @@ async function run() {
         );
         
         server.onerror = (err) => {
-          console.error("[MCP Error]", err);
         };
 
         await setupServerHandlers(server, tools);
@@ -196,7 +194,6 @@ async function run() {
 
         // Handle client disconnect
         res.on("close", async () => {
-          console.log("SSE client disconnected, session:", transport.sessionId);
           delete transports[transport.sessionId];
           await server.close();
           delete servers[transport.sessionId];
@@ -204,10 +201,8 @@ async function run() {
 
         // Connect server to transport
         await server.connect(transport);
-        console.log("SSE connection established, session:", transport.sessionId);
         
       } catch (error) {
-        console.error("SSE connection error:", error);
         res.status(400).json({ 
           error: error.message,
           details: "Token validation or server setup failed"
@@ -231,12 +226,10 @@ async function run() {
         const transport = transports[sessionId];
         const server = servers[sessionId];
 
-        console.log("POST /messages request for session:", sessionId);
 
         if (transport && server) {
           await transport.handlePostMessage(req, res);
         } else {
-          console.error("No transport/server found for sessionId:", sessionId);
           res.status(400).json({ 
             error: "No transport/server found for sessionId",
             sessionId: sessionId,
@@ -244,7 +237,6 @@ async function run() {
           });
         }
       } catch (error) {
-        console.error("POST /messages error:", error);
         res.status(500).json({ error: error.message });
       }
     });
@@ -260,8 +252,6 @@ async function run() {
 
     const port = process.env.PORT || 3001;
     app.listen(port, () => {
-      console.log(`[SSE Server] running on port ${port}`);
-      console.log(`[SSE Server] allowed origins:`, allowedOrigins);
     });
   } else {
     // stdio mode: single session over stdin/stdout
@@ -285,6 +275,5 @@ async function run() {
 }
 
 run().catch((err) => {
-  console.error(err);
   process.exit(1);
 });

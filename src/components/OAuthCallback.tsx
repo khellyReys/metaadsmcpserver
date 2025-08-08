@@ -27,11 +27,7 @@ const OAuthCallback: React.FC<OAuthCallbackProps> = ({ onAuthComplete, onError }
         setProgress(20);
         setMessage('Validating authentication...');
 
-        // Check URL parameters first
-        const hash = window.location.hash;
-        
-        console.log('OAuth callback - URL hash:', hash);
-
+       
         // Get the current session
         setProgress(40);
         setMessage('Establishing secure session...');
@@ -43,8 +39,6 @@ const OAuthCallback: React.FC<OAuthCallbackProps> = ({ onAuthComplete, onError }
         }
 
         if (!session) {
-          // Try to get session from URL parameters
-          console.log('No session found, checking URL parameters...');
           
           // Wait a bit for Supabase to process the tokens
           await new Promise(resolve => setTimeout(resolve, 2000));
@@ -53,7 +47,6 @@ const OAuthCallback: React.FC<OAuthCallbackProps> = ({ onAuthComplete, onError }
           const { data: { session: retrySession }, error: retryError } = await supabase.auth.getSession();
           
           if (retrySession) {
-            console.log('Session established after retry');
             await processSession(retrySession);
             return;
           } else {
@@ -64,7 +57,6 @@ const OAuthCallback: React.FC<OAuthCallbackProps> = ({ onAuthComplete, onError }
         await processSession(session);
 
       } catch (error) {
-        console.error('OAuth callback error:', error);
         setStatus('error');
         setMessage(error instanceof Error ? error.message : 'Authentication failed');
         onError(error instanceof Error ? error.message : 'Authentication failed');
@@ -95,8 +87,6 @@ const OAuthCallback: React.FC<OAuthCallbackProps> = ({ onAuthComplete, onError }
           email: user.email,
           picture_url: user.user_metadata?.avatar_url || user.user_metadata?.picture
         };
-
-        console.log('Processing Facebook user:', facebookData);
 
         setProgress(100);
         setMessage('Authentication successful!');

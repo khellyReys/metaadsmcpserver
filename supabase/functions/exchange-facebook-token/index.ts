@@ -134,7 +134,6 @@ serve(async (req) => {
     }
 
     // Step 1: Validate the short-lived token
-    console.log('Validating short-lived token...')
     const validateUrl = `https://graph.facebook.com/v22.0/debug_token?` +
       `input_token=${shortLivedToken}&` +
       `access_token=${FB_APP_ID}|${FB_APP_SECRET}`
@@ -186,7 +185,6 @@ serve(async (req) => {
     }
 
     // Step 2: Exchange short-lived token for long-lived token
-    console.log('Exchanging for long-lived token...')
     const exchangeUrl = `https://graph.facebook.com/v22.0/oauth/access_token?` +
       `grant_type=fb_exchange_token&` +
       `client_id=${FB_APP_ID}&` +
@@ -225,7 +223,6 @@ serve(async (req) => {
     }
 
     // Step 3: Get user permissions for the long-lived token
-    console.log('Fetching user permissions...')
     const permissionsUrl = `https://graph.facebook.com/v22.0/me/permissions?access_token=${exchangeData.access_token}`
     
     let grantedScopes: string[] = []
@@ -251,7 +248,6 @@ serve(async (req) => {
     const expiresAt = new Date(Date.now() + (expiresIn * 1000))
 
     // Step 5: Debug token info for the long-lived token
-    console.log('Getting long-lived token info...')
     let tokenInfo = null
     try {
       const debugUrl = `https://graph.facebook.com/v22.0/debug_token?` +
@@ -273,9 +269,6 @@ serve(async (req) => {
     } catch (debugError) {
       console.warn('Error getting token debug info:', debugError)
     }
-
-    // Log success for monitoring
-    console.log(`Successfully exchanged token for user ${validateData.data.user_id}, expires at ${expiresAt}`)
 
     // Step 6: Return successful response with comprehensive data
     return new Response(
