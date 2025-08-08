@@ -24,7 +24,7 @@ interface AdToolsProps {
   secret: string;
 }
 
-const MCP_BASE_URL = import.meta.env.VITE_MCP_URL || "http://localhost:3001";
+const MCP_BASE_URL = import.meta.env.VITE_MCP_URL || "https://metaadsmcpserver.onrender.com";
 
 const AdTools: React.FC<AdToolsProps> = ({ businessId, secret }) => {
   // State hooks...

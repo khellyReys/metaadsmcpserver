@@ -323,7 +323,7 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
     const tokenString = `${serverId}:${accessToken}`;
     const encodedToken = btoa(tokenString);
     
-    const mcpServerUrl = import.meta.env.VITE_MCP_SERVER_URL || 'http://localhost:3001';
+    const mcpServerUrl = import.meta.env.VITE_MCP_SERVER_URL || 'https://metaadsmcpserver.onrender.com';
     const sseUrl = `${mcpServerUrl}/sse?token=${encodeURIComponent(encodedToken)}`;
 
     try {
