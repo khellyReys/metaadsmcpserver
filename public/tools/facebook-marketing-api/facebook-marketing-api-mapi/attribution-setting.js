@@ -26,7 +26,6 @@ const executeFunction = async ({ account_id, token }) => {
     // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
-      console.error('Error fetching attribution settings:', JSON.stringify(errorData));
       throw new Error(errorData);
     }
 
@@ -34,7 +33,6 @@ const executeFunction = async ({ account_id, token }) => {
     const data = await response.json();
     return data;
   } catch (error) {
-    console.error('Error fetching attribution settings:', error);
     return { error: 'An error occurred while fetching attribution settings.' };
   }
 };

@@ -32,6 +32,7 @@ interface BusinessSelectionStepProps {
   onBackToServers: () => void;
   onClearError: () => void;
   supabase: SupabaseClient;
+  onFetchingProgress?: (progress: number, message: string) => void;
 }
 
 const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
@@ -47,9 +48,11 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
   onBusinessAccountsChange,
   onBackToServers,
   onClearError,
-  supabase
+  supabase,
+  onFetchingProgress = () => {},
 }) => {
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
 
   // Load business accounts when component mounts
   useEffect(() => {
@@ -66,7 +69,6 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
       if (selectedServer && servers.length > 0) {
         const serverData = servers.find(s => s.id === selectedServer);
         if (serverData?.access_token) {
-          console.log('Initializing SSE connection for server:', serverData.name);
           eventSource = connectToSSE(serverData.access_token);
         }
       }
@@ -77,40 +79,47 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
     return () => {
       if (eventSource) {
         eventSource.close();
-        console.log('SSE connection closed');
       }
     };
   }, [selectedServer, servers]);
 
   const fetchAndSaveBusinessAccounts = async () => {
     if (!facebookAccessToken || !currentUser) return;
-
+  
     try {
-      console.log('Fetching business accounts...');
-
+      
+      // Report progress - Step 1
+      onFetchingProgress?.(10, 'Validating Facebook token...');
+      
       // Test token validity first
       const meResponse = await fetch(`https://graph.facebook.com/v18.0/me?access_token=${facebookAccessToken}`);
       const meData = await meResponse.json();
-
+  
       if (meData.error) {
         throw new Error(`Facebook token invalid: ${meData.error.message}`);
       }
-
+  
+      // Report progress - Step 2
+     onFetchingProgress?.(25, 'Fetching business accounts...');
+  
       // Fetch businesses
       const businessResponse = await fetch(
         `https://graph.facebook.com/v18.0/me/businesses?` +
         `access_token=${facebookAccessToken}&` +
         `fields=id,name,primary_page,owned_ad_accounts{account_id,name,account_status,currency,timezone_name}`
       );
-
+  
       const businessData = await businessResponse.json();
-
+  
       if (businessData.error) {
         throw new Error(`Facebook API error: ${businessData.error.message}`);
       }
-
+  
+      // Report progress - Step 3
+      onFetchingProgress?.(40, 'Processing business data...');
+  
       const businesses: BusinessAccount[] = [];
-
+  
       if (businessData.data && businessData.data.length > 0) {
         for (const business of businessData.data) {
           // Save business account to database
@@ -124,12 +133,11 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
               status: 'active',
               primary_page_id: business.primary_page?.id,
             });
-
+  
           if (businessError) {
-            console.error('Error saving business account:', businessError);
             continue;
           }
-
+  
           // Save owned ad accounts
           let adAccountCount = 0;
           if (business.owned_ad_accounts?.data) {
@@ -146,13 +154,13 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
                   timezone_name: adAccount.timezone_name,
                   account_role: 'ADMIN',
                 });
-
+  
               if (!adAccountError) {
                 adAccountCount++;
               }
             }
           }
-
+  
           businesses.push({
             id: business.id,
             name: business.name,
@@ -162,16 +170,19 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
           });
         }
       }
-
+  
+      // Report progress - Step 4
+      onFetchingProgress?.(60, 'Fetching additional ad accounts...');
+  
       // Fetch additional ad accounts user has access to
       const adAccountsResponse = await fetch(
         `https://graph.facebook.com/v18.0/me/adaccounts?` +
         `access_token=${facebookAccessToken}&` +
         `fields=account_id,name,account_status,business,currency,timezone_name`
       );
-
+  
       const adAccountsData = await adAccountsResponse.json();
-
+  
       if (!adAccountsData.error && adAccountsData.data) {
         const adAccountsByBusiness: { [key: string]: any[] } = {};
         
@@ -193,14 +204,14 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
               }, {
                 onConflict: 'id'
               });
-
+  
             if (!adAccountsByBusiness[businessId]) {
               adAccountsByBusiness[businessId] = [];
             }
             adAccountsByBusiness[businessId].push(adAccount);
           }
         }
-
+  
         // Update business accounts with accurate ad account counts
         businesses.forEach(business => {
           if (adAccountsByBusiness[business.id]) {
@@ -211,14 +222,25 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
           }
         });
       }
-
+  
+      // Report progress - Step 5
+      onFetchingProgress?.(80, 'Fetching Facebook pages...');
+  
       // Fetch and save Facebook Pages
       await fetchAndSavePages();
-
+  
+      // Report progress - Complete
+      onFetchingProgress?.(100, 'Complete!');
+  
       onBusinessAccountsChange(businesses);
-
+  
+      // Clear progress after a short delay
+      setTimeout(() => {
+        onFetchingProgress?.(0, '');
+      }, 1000);
+  
     } catch (error) {
-      console.error('Error fetching business accounts:', error);
+      onFetchingProgress?.(0, '');
       // Error handled by parent component
     }
   };
@@ -234,7 +256,6 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
       const pagesData = await pagesResponse.json();
 
       if (pagesData.error) {
-        console.error('Facebook API error for pages:', pagesData.error);
         return;
       }
 
@@ -260,7 +281,6 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
         }
       }
     } catch (error) {
-      console.error('Error fetching pages:', error);
     }
   };
 
@@ -280,9 +300,16 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
     onBusinessSelectionChange(businessId);
   };
 
-  const handleContinue = () => {
+  const handleContinue = async () => {
     if (selectedBusiness) {
-      onBusinessSelected(selectedBusiness);
+      setIsProcessing(true);
+      try {
+        await onBusinessSelected(selectedBusiness);
+      } catch (error) {
+        // Error handled by parent component
+      } finally {
+        setIsProcessing(false);
+      }
     }
   };
 
@@ -296,39 +323,32 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
     const tokenString = `${serverId}:${accessToken}`;
     const encodedToken = btoa(tokenString);
     
-    const mcpServerUrl = import.meta.env.VITE_MCP_SERVER_URL || 'https://localhost:3000';
+    const mcpServerUrl = import.meta.env.VITE_MCP_SERVER_URL || 'http://localhost:3001';
     const sseUrl = `${mcpServerUrl}/sse?token=${encodeURIComponent(encodedToken)}`;
 
     try {
       const eventSource = new EventSource(sseUrl);
 
       eventSource.onopen = () => {
-        console.log('✅ SSE connection opened successfully');
         onClearError();
       };
 
       eventSource.onmessage = (event) => {
-        console.log('📨 SSE message received:', event.data);
         
         try {
           if (event.data.startsWith('{')) {
             const data = JSON.parse(event.data);
-            console.log('📋 SSE parsed JSON:', data);
           }
         } catch (parseError) {
-          console.log('📝 Plain text SSE message:', event.data);
         }
       };
 
       eventSource.onerror = (event) => {
-        console.error('💥 SSE connection error:', event);
         
         switch (eventSource.readyState) {
           case EventSource.CONNECTING:
-            console.log('🔄 SSE attempting to reconnect...');
             break;
           case EventSource.CLOSED:
-            console.log('🚫 SSE connection was closed');
             break;
         }
       };
@@ -336,7 +356,6 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
       return eventSource;
 
     } catch (error) {
-      console.error('💥 Failed to create SSE connection:', error);
       return null;
     }
   };
@@ -480,11 +499,20 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
             <div className="text-center">
               <button
                 onClick={handleContinue}
-                disabled={!selectedBusiness}
+                disabled={!selectedBusiness || isProcessing}
                 className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-8 py-3 rounded-xl font-semibold hover:shadow-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2 mx-auto"
               >
-                <span>Continue to Dashboard</span>
-                <ArrowRight className="w-4 h-4" />
+                {isProcessing ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    <span>Configuring account...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>Continue to Dashboard</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </>
+                )}
               </button>
             </div>
           </>

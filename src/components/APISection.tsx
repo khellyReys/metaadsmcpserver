@@ -81,7 +81,6 @@ const campaign = await client.campaigns.create({
 // Stream real-time performance
 const stream = client.performance.stream(campaign.id);
 stream.on('update', (data) => {
-  console.log('Live metrics:', data);
 });`}
             </pre>
           </div>

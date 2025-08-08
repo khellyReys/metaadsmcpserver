@@ -156,7 +156,6 @@ const executeFunction = async ({
         };
       }
   
-      console.log('Campaign created successfully:', data);
       return { 
         success: true, 
         data,
@@ -345,8 +344,6 @@ const executeFunction = async ({
     const finalParams = { ...aiSuggestions, ...userParams };
   
     if (options.showAISuggestions) {
-      console.log('AI Suggested Parameters:', aiSuggestions);
-      console.log('Final Parameters:', finalParams);
     }
   
     return executeFunction(finalParams);

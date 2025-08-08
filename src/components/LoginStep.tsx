@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Facebook, ArrowRight, AlertCircle } from 'lucide-react';
 import { SupabaseClient } from '@supabase/supabase-js';
 
@@ -17,14 +17,16 @@ const LoginStep: React.FC<LoginStepProps> = ({
   onClearError,
   supabase
 }) => {
+  const [isAuthenticating, setIsAuthenticating] = useState(false);
+
   const handleFacebookLogin = async () => {
     onClearError();
+    setIsAuthenticating(true);
 
     try {
       const frontendUrl = import.meta.env.VITE_APP_URL || window.location.origin;
-      const redirectUrl = `${frontendUrl}/login`;
-      
-      console.log('OAuth redirect URL:', redirectUrl);
+      // Fixed: Redirect to /dashboard instead of /login
+      const redirectUrl = `${frontendUrl}/dashboard`;
 
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'facebook',
@@ -39,6 +41,7 @@ const LoginStep: React.FC<LoginStepProps> = ({
       });
 
       if (error) {
+        setIsAuthenticating(false);
         throw error;
       }
 
@@ -46,10 +49,12 @@ const LoginStep: React.FC<LoginStepProps> = ({
       onLogin();
       
     } catch (err) {
-      console.error('Facebook OAuth error:', err);
+      setIsAuthenticating(false);
       // Error will be handled by parent component through auth state changes
     }
   };
+
+  const showLoading = isLoading || isAuthenticating;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 flex items-center justify-center p-4">
@@ -61,10 +66,10 @@ const LoginStep: React.FC<LoginStepProps> = ({
               <Facebook className="w-8 h-8 text-white" />
             </div>
             <h1 className="text-2xl font-bold text-gray-900 mb-2">
-              Connect Your Facebook Account
+              Connect Your Account
             </h1>
             <p className="text-gray-600">
-              Sign in with Facebook to access your Business Manager accounts and start automating your ads.
+              Access your Business Manager accounts and start automating your ads.
             </p>
           </div>
 
@@ -81,13 +86,15 @@ const LoginStep: React.FC<LoginStepProps> = ({
           {/* Login Button */}
           <button
             onClick={handleFacebookLogin}
-            disabled={isLoading}
+            disabled={showLoading}
             className="w-full bg-[#1877F2] hover:bg-[#166FE5] text-white font-semibold py-4 px-6 rounded-xl transition-all duration-200 flex items-center justify-center space-x-3 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {isLoading ? (
+            {showLoading ? (
               <>
                 <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                <span>Redirecting to Facebook...</span>
+                <span>
+                  {isAuthenticating ? 'Connecting to Facebook...' : 'Redirecting to Facebook...'}
+                </span>
               </>
             ) : (
               <>
@@ -114,8 +121,8 @@ const LoginStep: React.FC<LoginStepProps> = ({
             <ul className="text-xs text-blue-800 space-y-1">
               <li>• You'll be redirected to Facebook to authorize</li>
               <li>• We'll securely exchange your tokens</li>
-              <li>• You'll be brought back to create your MCP server</li>
-              <li>• Then select your business account</li>
+              <li>• You'll be brought back to your dashboard</li>
+              <li>• Then you can create your MCP server</li>
             </ul>
           </div>
         </div>
