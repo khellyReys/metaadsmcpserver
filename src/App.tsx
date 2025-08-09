@@ -79,6 +79,13 @@ const AppContent = () => {
   }, [location]);
 
   const handleBusinessSelected = (serverId: string, businessId: string) => {
+    console.log('Business selected:', { serverId, businessId }); // Debug log
+    
+    if (!serverId || !businessId) {
+      console.error('Missing required data:', { serverId, businessId });
+      return;
+    }
+    
     setSelectedBusinessId(businessId);
     setMcpSecret(serverId);
     navigate('/workspace');
@@ -112,9 +119,9 @@ const AppContent = () => {
       <Route 
         path="/workspace" 
         element={
-          selectedBusinessId ? (
+          selectedBusinessId && mcpSecret ? (
             <AdTools
-              businessId={selectedBusinessId}
+              accountId={selectedBusinessId}
               secret={mcpSecret}
               mcpServerLink={import.meta.env.VITE_MCP_SERVER_URL || "https://localhost:3000"}
               onLogout={handleLogout}

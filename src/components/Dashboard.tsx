@@ -24,11 +24,12 @@ const Dashboard: React.FC<DashboardProps> = ({ onServerSelected }) => {
 
         // Use the auth service to check authentication status
         const authStatus = await authService.checkAuthStatus();
+        console.log('Auth status:', authStatus); // Debug log
         
         if (authStatus.isAuthenticated) {
           setIsAuthenticated(true);
           setUserProfile(authStatus.userData);
-          setAuthData(authStatus.authData);
+          setAuthData(authStatus.authData || authStatus.userData);
         } else {
           setIsAuthenticated(false);
           setUserProfile(null);

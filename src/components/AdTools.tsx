@@ -117,8 +117,8 @@ const AdTools: React.FC<AdToolsProps> = ({ accountId, secret }) => {
     return matchesSearch && matchesCat;
   }), [tools, searchTerm, selectedCategory]);
 
-  // SSE URL & handshake
-  const sseUrl = useMemo(() => `${MCP_BASE_URL}/sse?token=${btoa(`${businessId}:${secret}`)}`, [businessId, secret]);
+  // SSE URL & handshake - FIXED: using accountId instead of businessId
+  const sseUrl = useMemo(() => `${MCP_BASE_URL}/sse?token=${btoa(`${accountId}:${secret}`)}`, [accountId, secret]);
   useEffect(() => {
     // Close any previous connection first
     esRef.current?.close();
