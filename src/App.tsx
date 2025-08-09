@@ -8,7 +8,7 @@ import Stats from './components/Stats';
 import Pricing from './components/Pricing';
 import Footer from './components/Footer';
 import AdTools from './components/AdTools';
-import Dashboard from './components/Dashboard'; // Import the standalone Dashboard component
+import Dashboard from './components/Dashboard';
 import authService from './auth/authService';
 
 // Landing page component that uses proper navigation
@@ -71,7 +71,6 @@ const AuthCallback = () => {
 const AppContent = () => {
   const [selectedBusinessId, setSelectedBusinessId] = useState<string>('');
   const [mcpSecret, setMcpSecret] = useState<string>('');
-  const [authData, setAuthData] = useState<any>(null);
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -79,22 +78,19 @@ const AppContent = () => {
   useEffect(() => {
   }, [location]);
 
-  const handleBusinessSelected = (serverId: string, businessId: string, serverData?: any) => {
+  const handleBusinessSelected = (serverId: string, businessId: string) => {
     setSelectedBusinessId(businessId);
     setMcpSecret(serverId);
-    setAuthData(serverData);
     navigate('/workspace');
   };
 
   const handleLogout = () => {
-    
     // Use auth service to logout
     authService.logout();
     
     // Clear business selection state
     setSelectedBusinessId('');
     setMcpSecret('');
-    setAuthData(null);
     
     navigate('/');
   };
@@ -108,11 +104,7 @@ const AppContent = () => {
       <Route 
         path="/dashboard" 
         element={
-          <Dashboard
-            onServerSelected={handleBusinessSelected}
-            authData={authData}
-            setAuthData={setAuthData}
-          />
+          <Dashboard onServerSelected={handleBusinessSelected} />
         } 
       />
       
@@ -137,9 +129,18 @@ const AppContent = () => {
       <Route path="/auth/callback" element={<AuthCallback />} />
       
       {/* Legacy routes - redirect to new structure */}
-      <Route path="/login" element={<Navigate to="/dashboard" replace />} />
-      <Route path="/auth" element={<Navigate to="/dashboard" replace />} />
-      <Route path="/tools" element={<Navigate to="/workspace" replace />} />
+      <Route 
+        path="/login" 
+        element={<Navigate to="/dashboard" replace />} 
+      />
+      <Route 
+        path="/auth" 
+        element={<Navigate to="/dashboard" replace />} 
+      />
+      <Route 
+        path="/tools" 
+        element={<Navigate to="/workspace" replace />} 
+      />
       
       {/* Catch all route */}
       <Route path="*" element={<Navigate to="/" replace />} />

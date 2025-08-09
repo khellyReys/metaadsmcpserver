@@ -29,17 +29,27 @@ interface Server {
 interface FacebookLoginProps {
   onServerSelected: (serverId: string, businessId: string, serverData: any) => void;
   initialAuthData?: any;
+  onAuthComplete?: (userData: any) => void;
+  onAuthError?: (error: string) => void;
+  skipLogin?: boolean;
+  authData?: any;
+  userProfile?: any;
 }
 
 type Step = 'login' | 'server-creation' | 'business-selection';
 
 const FacebookLogin: React.FC<FacebookLoginProps> = ({ 
-  onServerSelected, 
-  initialAuthData 
+  onServerSelected,
+  initialAuthData,
+  onAuthComplete,
+  onAuthError,
+  skipLogin = false,
+  authData,
+  userProfile
 }) => {
   // Main state
-  const [step, setStep] = useState<Step>('login');
-  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [step, setStep] = useState<Step>(skipLogin ? 'server-creation' : 'login');
+  const [currentUser, setCurrentUser] = useState<any>(userProfile || null);
   const [userSession, setUserSession] = useState<any>(null);
   const [facebookAccessToken, setFacebookAccessToken] = useState<string>('');
   const [error, setError] = useState<string>('');
@@ -51,32 +61,38 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
   const [selectedServer, setSelectedServer] = useState<string>('');
   const [selectedBusiness, setSelectedBusiness] = useState<string>('');
 
-  // Debug logging for token tracking
-  useEffect(() => {
-  }, [facebookAccessToken, userSession, currentUser, step]);
+  // Centralized token management
+  const getFacebookToken = () => {
+    return facebookAccessToken || 
+           userSession?.provider_token || 
+           userSession?.access_token || 
+           authData?.accessToken ||
+           '';
+  };
 
-  // Initialize auth state and handle initial auth data
+  // Initialize with provided auth data if available
   useEffect(() => {
-    if (initialAuthData) {
-      
-      setCurrentUser(initialAuthData.user);
+    if (initialAuthData && skipLogin) {
+      setCurrentUser(initialAuthData.user || userProfile);
       setUserSession(initialAuthData.session);
       
-      // Try multiple sources for the Facebook token
       const token = initialAuthData.facebookToken || 
+                   initialAuthData.accessToken ||
                    initialAuthData.session?.provider_token || 
                    initialAuthData.session?.access_token;
       
       setFacebookAccessToken(token || '');
       
-      loadUserServers(initialAuthData.user.id).then(() => {
-        setStep('server-creation');
-      });
+      if (initialAuthData.user?.id) {
+        loadUserServers(initialAuthData.user.id);
+      }
     }
-  }, [initialAuthData]);
+  }, [initialAuthData, skipLogin, userProfile]);
 
-  // Session management
+  // Session management (only if not skipping login)
   useEffect(() => {
+    if (skipLogin) return; // Don't set up session management if we're skipping login
+
     let mounted = true;
 
     const checkSession = async () => {
@@ -86,11 +102,11 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
         
         if (error) {
           setError('Failed to retrieve session. Please try logging in again.');
+          onAuthError?.('Failed to retrieve session. Please try logging in again.');
           return;
         }
 
         if (session?.user && mounted) {
-          
           setCurrentUser(session.user);
           setUserSession(session);
           
@@ -102,7 +118,9 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
         }
       } catch (err) {
         if (mounted) {
-          setError('Failed to initialize session. Please refresh the page.');
+          const errorMsg = 'Failed to initialize session. Please refresh the page.';
+          setError(errorMsg);
+          onAuthError?.(errorMsg);
         }
       } finally {
         if (mounted) {
@@ -113,7 +131,6 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
 
     // Listen for auth state changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      
       try {
         if (event === 'SIGNED_IN' && session?.user && mounted) {
           setCurrentUser(session.user);
@@ -125,10 +142,7 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
 
           await processAuthenticatedUser(session);
         } else if (event === 'SIGNED_OUT' && mounted) {
-          setCurrentUser(null);
-          setUserSession(null);
-          setFacebookAccessToken('');
-          setStep('login');
+          resetAuthState();
         } else if (event === 'TOKEN_REFRESHED' && session && mounted) {
           setUserSession(session);
           if (session.provider_token) {
@@ -137,7 +151,9 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
         }
       } catch (error) {
         if (mounted) {
-          setError('Authentication error occurred. Please try logging in again.');
+          const errorMsg = 'Authentication error occurred. Please try logging in again.';
+          setError(errorMsg);
+          onAuthError?.(errorMsg);
         }
       }
     });
@@ -148,13 +164,24 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
       mounted = false;
       subscription.unsubscribe();
     };
-  }, []);
+  }, [skipLogin, onAuthError]);
 
-  // Helper functions
+  // Reset auth state helper
+  const resetAuthState = () => {
+    setCurrentUser(null);
+    setUserSession(null);
+    setFacebookAccessToken('');
+    setServers([]);
+    setBusinessAccounts([]);
+    setSelectedServer('');
+    setSelectedBusiness('');
+    setStep('login');
+  };
+
+  // Process authenticated user
   const processAuthenticatedUser = async (session: any) => {
     try {
       const user = session.user;
-      
       
       const facebookData = {
         id: user.user_metadata?.provider_id || user.user_metadata?.sub,
@@ -168,11 +195,22 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
       
       setStep('server-creation');
       
+      // Notify parent component
+      onAuthComplete?.({
+        user: user,
+        session: session,
+        accessToken: session.provider_token,
+        facebookData: facebookData
+      });
+      
     } catch (err) {
-      setError(`Failed to process user data: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      const errorMsg = `Failed to process user data: ${err instanceof Error ? err.message : 'Unknown error'}`;
+      setError(errorMsg);
+      onAuthError?.(errorMsg);
     }
   };
 
+  // Exchange token and save user
   const exchangeTokenAndSaveUser = async (providerToken: string, facebookData: any, supabaseUser: any) => {
     try {
       if (!providerToken) {
@@ -181,7 +219,6 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
         return;
       }
 
-      
       const { data: { session } } = await supabase.auth.getSession();
       
       const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/exchange-facebook-token`, {
@@ -204,7 +241,6 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
       const data = await response.json();
 
       if (data.success) {
-
         setFacebookAccessToken(data.longLivedToken);
         await saveUserToDatabase(data, facebookData, supabaseUser);
       } else {
@@ -213,15 +249,18 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
       }
 
     } catch (error) {
+      console.error('Token exchange error:', error);
       await saveUserToDatabase(null, facebookData, supabaseUser, providerToken);
     }
   };
 
+  // Save user to database
   const saveUserToDatabase = async (tokenData: any, facebookData: any, supabaseUser: any, fallbackToken?: string) => {
     try {
-      const tokenToUse = tokenData?.longLivedToken || fallbackToken || facebookAccessToken;
+      const tokenToUse = tokenData?.longLivedToken || fallbackToken || getFacebookToken();
       const expiresAt = tokenData?.expiresAt || new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
       const scopes = tokenData?.grantedScopes || ['email', 'pages_read_engagement', 'business_management', 'ads_management'];
+      
       const { data: userAccessToken, error: dbError } = await supabase
         .rpc('upsert_user_with_facebook_data', {
           p_user_id: supabaseUser.id,
@@ -241,17 +280,18 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
         throw new Error('Failed to save user data: ' + dbError.message);
       }
 
-
-      // Ensure we have the token in state
+      // Update token state if we got a new one
       if (tokenToUse && !facebookAccessToken) {
         setFacebookAccessToken(tokenToUse);
       }
 
     } catch (error) {
+      console.error('Database save error:', error);
       throw error;
     }
   };
 
+  // Load user servers
   const loadUserServers = async (userId: string) => {
     try {
       const { data: serversData, error } = await supabase
@@ -271,17 +311,19 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
 
       setServers(serversList);
     } catch (err) {
+      console.error('Failed to load servers:', err);
     }
   };
 
+  // Event handlers
   const handleLogout = async () => {
     try {
       await supabase.auth.signOut();
     } catch (error) {
+      console.error('Logout error:', error);
     }
   };
 
-  // Step handlers
   const handleLoginSuccess = () => {
     // Auth state change will handle the transition
   };
@@ -291,7 +333,6 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
     setStep('business-selection');
   };
 
-  // NEW: Handler for complete server selection with business accounts
   const handleCompleteServerSelection = (serverId: string, businessAccounts: BusinessAccount[]) => {
     setSelectedServer(serverId);
     setBusinessAccounts(businessAccounts);
@@ -329,11 +370,13 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
         user: userData,
         business: selectedBusinessData,
         server: selectedServerData,
-        accessToken: facebookAccessToken,
+        accessToken: getFacebookToken(),
         session: userSession
       });
     } catch (err) {
-      setError(`Failed to select business: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      const errorMsg = `Failed to select business: ${err instanceof Error ? err.message : 'Unknown error'}`;
+      setError(errorMsg);
+      onAuthError?.(errorMsg);
     }
   };
 
@@ -342,14 +385,7 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
     setStep('server-creation');
   };
 
-  // Clear error helper
   const clearError = () => setError('');
-
-  // Get the best available Facebook token
-  const getAvailableFacebookToken = () => {
-    const token = facebookAccessToken || userSession?.provider_token || '';
-    return token;
-  };
 
   // Render appropriate step
   switch (step) {
@@ -375,7 +411,7 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
           onLogout={handleLogout}
           onClearError={clearError}
           supabase={supabase}
-          facebookAccessToken={getAvailableFacebookToken()}
+          facebookAccessToken={getFacebookToken()}
           onCompleteServerSelection={handleCompleteServerSelection}
         />
       );
@@ -388,7 +424,7 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
           servers={servers}
           businessAccounts={businessAccounts}
           selectedBusiness={selectedBusiness}
-          facebookAccessToken={getAvailableFacebookToken()}
+          facebookAccessToken={getFacebookToken()}
           error={error}
           onBusinessSelected={handleBusinessSelected}
           onBusinessSelectionChange={setSelectedBusiness}

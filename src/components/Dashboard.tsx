@@ -4,21 +4,16 @@ import FacebookLogin from './FacebookLogin';
 import authService from '../auth/authService';
 
 interface DashboardProps {
-  onServerSelected: (serverId: string, businessId: string, serverData?: any) => void;
-  authData: any;
-  setAuthData: (data: any) => void;
+  onServerSelected: (serverId: string, businessId: string) => void;
 }
 
-const Dashboard: React.FC<DashboardProps> = ({ 
-  onServerSelected, 
-  authData,
-  setAuthData 
-}) => {
+const Dashboard: React.FC<DashboardProps> = ({ onServerSelected }) => {
   const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [userProfile, setUserProfile] = useState<any>(null);
+  const [authData, setAuthData] = useState<any>(null);
 
   // Single auth check - NO AUTH STATE LISTENER HERE
   useEffect(() => {
@@ -31,12 +26,10 @@ const Dashboard: React.FC<DashboardProps> = ({
         const authStatus = await authService.checkAuthStatus();
         
         if (authStatus.isAuthenticated) {
-          
           setIsAuthenticated(true);
           setUserProfile(authStatus.userData);
           setAuthData(authStatus.authData);
         } else {
-          
           setIsAuthenticated(false);
           setUserProfile(null);
           setAuthData(null);
@@ -47,7 +40,6 @@ const Dashboard: React.FC<DashboardProps> = ({
           }
         }
       } catch (error) {
-        
         setIsAuthenticated(false);
         setUserProfile(null);
         setAuthData(null);
@@ -79,7 +71,6 @@ const Dashboard: React.FC<DashboardProps> = ({
       
       navigate('/');
     } catch (error) {
-      
       // Force clear local state even if server logout failed
       authService.clearAuth();
       setAuthData(null);
@@ -93,7 +84,6 @@ const Dashboard: React.FC<DashboardProps> = ({
   };
 
   const handleAuthComplete = (userData: any) => {
-    
     // Store auth data using auth service
     authService.setStoredAuth(userData);
     
@@ -105,7 +95,6 @@ const Dashboard: React.FC<DashboardProps> = ({
   };
 
   const handleAuthError = (error: string) => {
-    
     // Clear auth data and update state
     authService.clearAuth();
     setIsAuthenticated(false);

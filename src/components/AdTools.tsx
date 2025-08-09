@@ -20,13 +20,13 @@ interface McpTool {
 }
 
 interface AdToolsProps {
-  businessId: string;
+  accountId: string;
   secret: string;
 }
 
 const MCP_BASE_URL = import.meta.env.VITE_MCP_URL || "https://metaadsmcpserver.onrender.com";
 
-const AdTools: React.FC<AdToolsProps> = ({ businessId, secret }) => {
+const AdTools: React.FC<AdToolsProps> = ({ accountId, secret }) => {
   // State hooks...
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All");
@@ -305,7 +305,7 @@ const AdTools: React.FC<AdToolsProps> = ({ businessId, secret }) => {
     setSelectedTool(tool);
     const initialValues: Record<string,string> = {};
     tool.parameters?.properties && Object.keys(tool.parameters.properties).forEach(key => {
-      initialValues[key] = key === 'account_id' ? businessId : '';
+      initialValues[key] = key === 'account_id' ? accountId : '';
     });
     setParameterValues(initialValues);
     setToolResponse(null);

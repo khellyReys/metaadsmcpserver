@@ -10,6 +10,15 @@ interface BusinessAccount {
   adAccountsCount: number;
 }
 
+interface AdAccount {
+  id: string;
+  name: string;
+  account_status: string;
+  currency: string;
+  timezone_name: string;
+  account_role: string;
+}
+
 interface Server {
   id: string;
   name: string;
@@ -53,6 +62,12 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
 }) => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  
+  // New state for ad account selection
+  const [currentStep, setCurrentStep] = useState<'business' | 'adaccount'>('business');
+  const [adAccounts, setAdAccounts] = useState<AdAccount[]>([]);
+  const [selectedAdAccount, setSelectedAdAccount] = useState<string>('');
+  const [loadingAdAccounts, setLoadingAdAccounts] = useState(false);
 
   // Load business accounts when component mounts
   useEffect(() => {
@@ -284,6 +299,29 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
     }
   };
 
+  // New function to fetch ad accounts for selected business
+  const fetchAdAccountsForBusiness = async (businessId: string) => {
+    setLoadingAdAccounts(true);
+    try {
+      const { data: adAccountsData, error } = await supabase
+        .from('facebook_ad_accounts')
+        .select('id, name, account_status, currency, timezone_name, account_role')
+        .eq('business_account_id', businessId)
+        .eq('user_id', currentUser.id);
+
+      if (error) {
+        throw new Error('Failed to load ad accounts: ' + error.message);
+      }
+
+      setAdAccounts(adAccountsData || []);
+    } catch (error) {
+      console.error('Error fetching ad accounts:', error);
+      setAdAccounts([]);
+    } finally {
+      setLoadingAdAccounts(false);
+    }
+  };
+
   const handleRefreshData = async () => {
     setIsRefreshing(true);
     onClearError();
@@ -300,17 +338,30 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
     onBusinessSelectionChange(businessId);
   };
 
+  // Updated continue handler
   const handleContinue = async () => {
-    if (selectedBusiness) {
+    if (currentStep === 'business' && selectedBusiness) {
+      // Move to ad account selection
+      await fetchAdAccountsForBusiness(selectedBusiness);
+      setCurrentStep('adaccount');
+    } else if (currentStep === 'adaccount' && selectedAdAccount) {
+      // Continue with selected ad account
       setIsProcessing(true);
       try {
-        await onBusinessSelected(selectedBusiness);
+        await onBusinessSelected(selectedAdAccount); // ← Now passes ad account ID
       } catch (error) {
         // Error handled by parent component
       } finally {
         setIsProcessing(false);
       }
     }
+  };
+
+  // New back button handler
+  const handleBackToBusiness = () => {
+    setCurrentStep('business');
+    setSelectedAdAccount('');
+    setAdAccounts([]);
   };
 
   // SSE Connection
@@ -395,26 +446,55 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
             </div>
           )}
 
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Select Business Manager Account</h1>
-          <p className="text-gray-600">Choose the business account you want to manage ads for</p>
+          {/* Dynamic header based on current step */}
+          {currentStep === 'business' ? (
+            <>
+              <h1 className="text-3xl font-bold text-gray-900 mb-2">Select Business Manager Account</h1>
+              <p className="text-gray-600">Choose the business account you want to manage ads for</p>
+            </>
+          ) : (
+            <>
+              <h1 className="text-3xl font-bold text-gray-900 mb-2">Select Ad Account</h1>
+              <p className="text-gray-600">Choose the ad account you want to manage</p>
+              
+              {/* Selected Business Info */}
+              <div className="bg-blue-50 rounded-lg p-3 mt-4 max-w-md mx-auto">
+                <p className="text-blue-900 text-sm">
+                  <strong>Business:</strong> {businessAccounts.find(b => b.id === selectedBusiness)?.name}
+                </p>
+              </div>
+            </>
+          )}
           
           <div className="flex items-center justify-center space-x-4 mt-4">
-            <button
-              onClick={handleRefreshData}
-              disabled={isRefreshing}
-              className="inline-flex items-center space-x-2 text-blue-600 hover:text-blue-700 text-sm"
-            >
-              <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-              <span>Refresh Data</span>
-            </button>
-            
-            <button
-              onClick={onBackToServers}
-              className="inline-flex items-center space-x-2 text-gray-600 hover:text-gray-700 text-sm"
-            >
-              <ArrowRight className="w-4 h-4 rotate-180" />
-              <span>Back to Servers</span>
-            </button>
+            {currentStep === 'business' ? (
+              <>
+                <button
+                  onClick={handleRefreshData}
+                  disabled={isRefreshing}
+                  className="inline-flex items-center space-x-2 text-blue-600 hover:text-blue-700 text-sm"
+                >
+                  <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+                  <span>Refresh Data</span>
+                </button>
+                
+                <button
+                  onClick={onBackToServers}
+                  className="inline-flex items-center space-x-2 text-gray-600 hover:text-gray-700 text-sm"
+                >
+                  <ArrowRight className="w-4 h-4 rotate-180" />
+                  <span>Back to Servers</span>
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={handleBackToBusiness}
+                className="inline-flex items-center space-x-2 text-gray-600 hover:text-gray-700 text-sm"
+              >
+                <ArrowRight className="w-4 h-4 rotate-180" />
+                <span>Back to Business Selection</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -428,7 +508,7 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
           </div>
         )}
 
-        {/* Business Accounts */}
+        {/* Business Accounts or Ad Accounts */}
         {businessAccounts.length === 0 ? (
           <div className="text-center py-12">
             <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -449,72 +529,147 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
           </div>
         ) : (
           <>
-            {/* Business Cards Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-              {businessAccounts.map((business) => (
-                <div
-                  key={business.id}
-                  onClick={() => handleBusinessCardClick(business.id)}
-                  className={`bg-white rounded-xl p-6 border-2 cursor-pointer transition-all duration-200 hover:shadow-lg ${
-                    selectedBusiness === business.id
-                      ? 'border-blue-500 shadow-lg'
-                      : 'border-gray-200 hover:border-gray-300'
-                  }`}
-                >
-                  <div className="flex items-start justify-between mb-4">
-                    <div className="flex items-center space-x-3">
-                      <div className="w-12 h-12 bg-gradient-to-br from-blue-100 to-purple-100 rounded-lg flex items-center justify-center">
-                        <Building2 className="w-6 h-6 text-blue-600" />
+            {/* Business Cards Grid - Only show on business step */}
+            {currentStep === 'business' && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                {businessAccounts.map((business) => (
+                  <div
+                    key={business.id}
+                    onClick={() => handleBusinessCardClick(business.id)}
+                    className={`bg-white rounded-xl p-6 border-2 cursor-pointer transition-all duration-200 hover:shadow-lg ${
+                      selectedBusiness === business.id
+                        ? 'border-blue-500 shadow-lg'
+                        : 'border-gray-200 hover:border-gray-300'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between mb-4">
+                      <div className="flex items-center space-x-3">
+                        <div className="w-12 h-12 bg-gradient-to-br from-blue-100 to-purple-100 rounded-lg flex items-center justify-center">
+                          <Building2 className="w-6 h-6 text-blue-600" />
+                        </div>
+                        <div>
+                          <h3 className="font-semibold text-gray-900">{business.name}</h3>
+                          <p className="text-sm text-gray-500">{business.business_role}</p>
+                        </div>
                       </div>
-                      <div>
-                        <h3 className="font-semibold text-gray-900">{business.name}</h3>
-                        <p className="text-sm text-gray-500">{business.business_role}</p>
-                      </div>
+                      {selectedBusiness === business.id && (
+                        <CheckCircle className="w-6 h-6 text-blue-500" />
+                      )}
                     </div>
-                    {selectedBusiness === business.id && (
-                      <CheckCircle className="w-6 h-6 text-blue-500" />
-                    )}
-                  </div>
 
-                  <div className="flex items-center justify-between text-sm">
-                    <div className="flex items-center space-x-4">
-                      <div className="flex items-center space-x-1">
-                        <Users className="w-4 h-4 text-gray-400" />
-                        <span className="text-gray-600">{business.adAccountsCount} Ad Accounts</span>
+                    <div className="flex items-center justify-between text-sm">
+                      <div className="flex items-center space-x-4">
+                        <div className="flex items-center space-x-1">
+                          <Users className="w-4 h-4 text-gray-400" />
+                          <span className="text-gray-600">{business.adAccountsCount} Ad Accounts</span>
+                        </div>
                       </div>
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                        business.status === 'active'
+                          ? 'bg-green-100 text-green-700'
+                          : 'bg-yellow-100 text-yellow-700'
+                      }`}>
+                        {business.status === 'active' ? 'Active' : 'Pending'}
+                      </span>
                     </div>
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                      business.status === 'active'
-                        ? 'bg-green-100 text-green-700'
-                        : 'bg-yellow-100 text-yellow-700'
-                    }`}>
-                      {business.status === 'active' ? 'Active' : 'Pending'}
-                    </span>
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
 
-            {/* Continue Button */}
-            <div className="text-center">
-              <button
-                onClick={handleContinue}
-                disabled={!selectedBusiness || isProcessing}
-                className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-8 py-3 rounded-xl font-semibold hover:shadow-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2 mx-auto"
-              >
-                {isProcessing ? (
-                  <>
-                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                    <span>Configuring account...</span>
-                  </>
+            {/* Ad Account Selection - Show when step is 'adaccount' */}
+            {currentStep === 'adaccount' && (
+              <>
+                {/* Loading State */}
+                {loadingAdAccounts ? (
+                  <div className="text-center py-12">
+                    <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                    <p className="text-gray-600">Loading ad accounts...</p>
+                  </div>
+                ) : adAccounts.length === 0 ? (
+                  /* No Ad Accounts */
+                  <div className="text-center py-12">
+                    <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                      <AlertCircle className="w-8 h-8 text-gray-400" />
+                    </div>
+                    <h3 className="text-lg font-medium text-gray-900 mb-2">No Ad Accounts Found</h3>
+                    <p className="text-gray-600 mb-4">
+                      This business doesn't have any ad accounts associated with it.
+                    </p>
+                  </div>
                 ) : (
-                  <>
-                    <span>Continue to Dashboard</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </>
+                  /* Ad Accounts Grid */
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                    {adAccounts.map((adAccount) => (
+                      <div
+                        key={adAccount.id}
+                        onClick={() => setSelectedAdAccount(adAccount.id)}
+                        className={`bg-white rounded-xl p-6 border-2 cursor-pointer transition-all duration-200 hover:shadow-lg ${
+                          selectedAdAccount === adAccount.id
+                            ? 'border-blue-500 shadow-lg'
+                            : 'border-gray-200 hover:border-gray-300'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between mb-4">
+                          <div className="flex items-center space-x-3">
+                            <div className="w-12 h-12 bg-gradient-to-br from-green-100 to-blue-100 rounded-lg flex items-center justify-center">
+                              <Users className="w-6 h-6 text-green-600" />
+                            </div>
+                            <div>
+                              <h3 className="font-semibold text-gray-900">{adAccount.name}</h3>
+                              <p className="text-sm text-gray-500">Account ID: {adAccount.id}</p>
+                            </div>
+                          </div>
+                          {selectedAdAccount === adAccount.id && (
+                            <CheckCircle className="w-6 h-6 text-blue-500" />
+                          )}
+                        </div>
+
+                        <div className="flex items-center justify-between text-sm">
+                          <div className="flex items-center space-x-4">
+                            <span className="text-gray-600">{adAccount.currency}</span>
+                            <span className="text-gray-600">{adAccount.account_role}</span>
+                          </div>
+                          <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                            adAccount.account_status === 'ACTIVE'
+                              ? 'bg-green-100 text-green-700'
+                              : 'bg-yellow-100 text-yellow-700'
+                          }`}>
+                            {adAccount.account_status}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 )}
-              </button>
-            </div>
+              </>
+            )}
+
+            {/* Continue Button - Updated to handle both steps */}
+            {((currentStep === 'business' && selectedBusiness) || 
+              (currentStep === 'adaccount' && selectedAdAccount)) && (
+              <div className="text-center">
+                <button
+                  onClick={handleContinue}
+                  disabled={isProcessing}
+                  className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-8 py-3 rounded-xl font-semibold hover:shadow-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2 mx-auto"
+                >
+                  {isProcessing ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      <span>Configuring account...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>
+                        {currentStep === 'business' ? 'Continue to Ad Accounts' : 'Continue to Dashboard'}
+                      </span>
+                      <ArrowRight className="w-4 h-4" />
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
           </>
         )}
       </div>
