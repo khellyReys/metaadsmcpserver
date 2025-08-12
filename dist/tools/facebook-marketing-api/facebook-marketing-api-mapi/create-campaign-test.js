@@ -360,7 +360,7 @@ const executeFunction = async ({
     definition: {
       type: 'function',
       function: {
-        name: 'create_campaign',
+        name: 'create_campaign_test',
         description: 'Create a campaign using the Facebook Marketing API v23.0 with intelligent defaults and best practices.',
         parameters: {
           type: 'object',
@@ -376,7 +376,7 @@ const executeFunction = async ({
             objective: {
               type: 'string',
               description: 'The objective of the campaign.',
-              enum: ['OUTCOME_TRAFFIC', 'OUTCOME_SALES', 'OUTCOME_LEADS', 'OUTCOME_ENGAGEMENT', 'OUTCOME_AWARENESS'],
+              enum: ['OUTCOME_TRAFFIC', 'OUTCOME_SALES', 'OUTCOME_LEADS', 'OUTCOME_ENGAGEMENT', 'OUTCOME_AWARENESS',],
               default: 'OUTCOME_TRAFFIC'
             },
             status: {

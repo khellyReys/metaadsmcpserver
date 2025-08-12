@@ -28,7 +28,6 @@ const executeFunction = async ({ ad_id_awareness, token, status_option = 'PAUSED
     // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
-      console.error('Error copying ad:', JSON.stringify(errorData));
       throw new Error(errorData);
     }
 
@@ -36,7 +35,6 @@ const executeFunction = async ({ ad_id_awareness, token, status_option = 'PAUSED
     const data = await response.json();
     return data;
   } catch (error) {
-    console.error('Error copying ad:', error);
     return { error: 'An error occurred while copying the ad.' };
   }
 };

@@ -22,7 +22,6 @@ const executeFunction = async ({ account_id, base_url = 'https://graph.facebook.
     // Construct the URL for the request
     const url = `${base_url}/act_${account_id}/campaigns?fields=id,name,objective,account_id,buying_type,daily_budget,lifetime_budget,spend_cap,bid_strategy,pacing_type,status,effective_status,promoted_object,recommendations,start_time,stop_time,created_time,updated_time,adlabels,issues_info,special_ad_categories,special_ad_category_country,smart_promotion_type,is_skadnetwork_attribution`;
 
-    console.log('Making Facebook API request to:', url.replace(token, '[REDACTED]'));
 
     // Set up headers for the request
     const headers = {
@@ -67,8 +66,6 @@ const executeFunction = async ({ account_id, base_url = 'https://graph.facebook.
       const error = data.error;
       throw new Error(`Facebook API Error (${error.code}): ${error.message}`);
     }
-
-    console.log(`Successfully fetched ${data.data?.length || 0} campaigns for account ${account_id}`);
     
     return {
       success: true,

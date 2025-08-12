@@ -24,7 +24,6 @@ export const toolPaths = [
   'facebook-marketing-api/facebook-marketing-api-mapi/get-assgined-users.js',
   'facebook-marketing-api/facebook-marketing-api-mapi/create-a-campaign-outcome-engagement.js',
   'facebook-marketing-api/facebook-marketing-api-mapi/create-ad-for-awareness-campaign.js',
-  'facebook-marketing-api/facebook-marketing-api-mapi/create-using-existing-creative.js',
   'facebook-marketing-api/facebook-marketing-api-mapi/get-reach-frequency-predictions.js',
   'facebook-marketing-api/facebook-marketing-api-mapi/attribution-setting.js',
   'facebook-marketing-api/facebook-marketing-api-mapi/get-pixel-details.js',
@@ -45,5 +44,9 @@ export const toolPaths = [
   'facebook-marketing-api/facebook-marketing-api-mapi/get-insight-for-ads-group.js',
   'facebook-marketing-api/facebook-marketing-api-mapi/get-report-for-insight-2.js',
   'facebook-marketing-api/facebook-marketing-api-mapi/reportid-breakdown-generate.js',
-  'facebook-marketing-api/facebook-marketing-api-mapi/create-campaign.js'
+
+  //custom tools
+  'facebook-marketing-api/facebook-marketing-api-mapi/create-campaign-messages.js',
+
+  
 ];
