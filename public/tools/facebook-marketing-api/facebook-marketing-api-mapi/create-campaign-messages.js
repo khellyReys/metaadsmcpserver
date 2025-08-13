@@ -1,398 +1,354 @@
-// /**
-//  * MCP Tool for creating Facebook campaigns for engagement/conversations
-//  */
+#!/usr/bin/env node
 
-// /**
-//  * Create a Facebook campaign for driving conversations/engagement
-//  */
-// const executeFunction = async ({ 
-//   account_id, 
-//   name,
-//   objective, // Now required, no default value
-//   status = 'ACTIVE',
-//   special_ad_categories = ['NONE'],
-//   buying_type = 'AUCTION',
-//   bid_strategy = 'LOWEST_COST_WITHOUT_CAP',
-//   daily_budget = 1000,
-//   lifetime_budget = null,
-//   campaign_budget_optimization = true
-// }) => {
-//   // Only import and initialize Node-only dependencies at execution time
-//   const { createClient } = await import('@supabase/supabase-js');
+import dotenv from "dotenv";
+import express from "express";
+import cors from "cors";
+import path from "path";
+import { fileURLToPath } from "url";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+  McpError,
+  ErrorCode,
+} from "@modelcontextprotocol/sdk/types.js";
+import { discoverTools } from "./lib/tools.js";
+
+dotenv.config({
+  path: path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    ".env"
+  ),
+});
+
+const SERVER_NAME = "generated-mcp-server";
+
+// Token validation function (add your own logic here)
+function validateToken(token) {
+  if (!token) {
+    throw new Error("Token is required");
+  }
   
-//   // Create Supabase client only when function executes
-//   const supabase = createClient(
-//     process.env.SUPABASE_URL,
-//     process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY,
-//     {
-//       auth: {
-//         autoRefreshToken: false,
-//         persistSession: false
-//       }
-//     }
-//   );
-
-//   // Helper function to get user ID from account ID (defined inside executeFunction)
-//   const getUserFromAccount = async (supabase, accountId) => {
-//     console.log('🔍 Finding user for account ID:', accountId);
-//     console.log('🔍 Account ID type:', typeof accountId, 'Value:', JSON.stringify(accountId));
+  try {
+    // Decode the base64 token
+    const decoded = Buffer.from(token, 'base64').toString('utf-8');
     
-//     if (!accountId) {
-//       throw new Error('Account ID is required');
-//     }
+    // Add your token validation logic here
+    // For example, check if it contains expected server ID and access token
+    if (!decoded.includes(':')) {
+      throw new Error("Invalid token format");
+    }
+    
+    const [serverId, accessToken] = decoded.split(':');
+    if (!serverId || !accessToken) {
+      throw new Error("Invalid token components");
+    }
+    
+    return { serverId, accessToken };
+  } catch (error) {
+    throw new Error(`Token validation failed: ${error.message}`);
+  }
+}
 
-//     try {
-//       // Convert to string to ensure type consistency
-//       const accountIdStr = String(accountId).trim();
+async function transformTools(tools) {
+  return tools
+    .map((tool) => {
+      const fn = tool.definition?.function;
+      if (!fn) return null;
+      return {
+        name: fn.name,
+        description: fn.description,
+        inputSchema: fn.parameters,
+      };
+    })
+    .filter(Boolean);
+}
+
+async function setupServerHandlers(server, tools) {
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: await transformTools(tools),
+  }));
+
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const name = request.params.name;
+    const tool = tools.find((t) => t.definition.function.name === name);
+    if (!tool) {
+      throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
+    }
+
+    const args = request.params.arguments;
+    const required = tool.definition.function.parameters.required || [];
+    for (const param of required) {
+      if (!(param in args)) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          `Missing required parameter: ${param}`
+        );
+      }
+    }
+
+    try {
+      const result = await tool.function(args);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (err) {
+      throw new McpError(
+        ErrorCode.InternalError,
+        `Tool execution failed: ${err.message}`
+      );
+    }
+  });
+}
+
+async function run() {
+  const isSSE = process.argv.includes("--sse");
+  const tools = await discoverTools();
+
+  if (isSSE) {
+    const app = express();
+    const transports = {};
+    const servers = {};
+
+    const allowedOrigins = [
+      "http://localhost:3000",           // Your React dev server
+      "https://localhost:3000",          // HTTPS localhost
+      "http://localhost:5173",           // Vite default
+      "https://localhost:5173",          // HTTPS Vite
+      "https://metaadsmcpserver-1.onrender.com" // Replace with your actual frontend domain
+    ];
+    
+    // CORS configuration
+    app.use(
+      cors({
+        origin: (incomingOrigin, callback) => {
+          // Allow requests with no origin (like mobile apps or curl)
+          if (!incomingOrigin) {
+            callback(null, true);
+            return;
+          }
+          
+          if (allowedOrigins.includes(incomingOrigin)) {
+            callback(null, true);
+          } else {
+            console.error(`CORS blocked origin: ${incomingOrigin}`);
+            callback(new Error(`Origin ${incomingOrigin} not allowed by CORS`));
+          }
+        },
+        methods: ["GET", "POST", "OPTIONS"],
+        allowedHeaders: [
+          "Content-Type", 
+          "Authorization", 
+          "Cache-Control", 
+          "X-Requested-With"
+        ],
+        credentials: true,
+      })
+    );
+
+    // Middleware to inject Render/Nginx bypass headers for SSE
+    app.use("/sse", (req, res, next) => {
+      // Set CORS headers
+      const origin = req.headers.origin;
+      if (origin && allowedOrigins.includes(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+      }
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
       
-//       console.log('🔧 Searching for account ID (as string):', accountIdStr);
+      // Critical header to bypass Render's Nginx buffering
+      res.setHeader('X-Accel-Buffering', 'no');
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
       
-//       // Query without .single() first to see what we get
-//       const { data: allData, error: allError, count } = await supabase
-//         .from('facebook_ad_accounts')
-//         .select('user_id, id, name', { count: 'exact' })
-//         .eq('id', accountIdStr);
+      next();
+    });
+    app.use((req, res, next) => {
+      if (req.path === "/messages") {
+        next(); // skip JSON parsing for SSE message handling
+      } else {
+        express.json()(req, res, next);
+      }
+    });
 
-//       console.log('📊 Query results:', { 
-//         count, 
-//         allData, 
-//         allError, 
-//         searchedAccountId: accountIdStr 
-//       });
+    // FIXED: Proper OPTIONS handling for SSE endpoint
+    app.options("/sse", (req, res) => {
+      const origin = req.headers.origin;
+      if (!origin || allowedOrigins.includes(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin || '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cache-Control, X-Requested-With');
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+        res.status(200).end();
+      } else {
+        res.status(403).json({ error: 'Origin not allowed' });
+      }
+    });
 
-//       if (allError) {
-//         console.error('❌ Account lookup error:', allError);
-//         throw new Error(`Account lookup failed: ${allError.message}`);
-//       }
-
-//       if (!allData || allData.length === 0) {
-//         console.warn('⚠️ No accounts found with ID:', accountIdStr);
+    // SIMPLIFIED: SSE endpoint - let MCP SDK handle everything
+    app.get("/sse", async (req, res) => {
+      console.log(`SSE request from origin: ${req.headers.origin}`);
+      
+      try {
+        // Validate token from query parameter
+        const token = req.query.token;
+        const tokenData = validateToken(token);
+        console.log(`Token validated for server: ${tokenData.serverId}`);
         
-//         // Let's also try a broader search to see what accounts exist
-//         const { data: sampleData } = await supabase
-//           .from('facebook_ad_accounts')
-//           .select('id, name')
-//           .limit(5);
+        // Create MCP server instance
+        const server = new Server(
+          { name: SERVER_NAME, version: "0.1.0" },
+          { capabilities: { tools: {} } }
+        );
         
-//         console.log('📋 Sample accounts in database:', sampleData);
+        server.onerror = (err) => {
+          console.error("[MCP Server Error]", err);
+        };
+
+        await setupServerHandlers(server, tools);
+
+        // Create SSE transport and let it handle headers
+        const transport = new SSEServerTransport("/messages", res);
+        transports[transport.sessionId] = transport;
+        servers[transport.sessionId] = server;
+
+        console.log(`SSE connection established. Session ID: ${transport.sessionId}`);
+
+        // Handle client disconnect
+        res.on("close", async () => {
+          console.log(`SSE connection closed. Session ID: ${transport.sessionId}`);
+          delete transports[transport.sessionId];
+          await server.close();
+          delete servers[transport.sessionId];
+        });
+
+        // Handle connection errors
+        res.on("error", (err) => {
+          console.error("SSE connection error:", err);
+        });
+
+        // Connect server to transport
+        await server.connect(transport);
         
-//         throw new Error(`Ad account ${accountIdStr} not found in database. Check if the account ID is correct.`);
-//       }
+      } catch (error) {
+        console.error("SSE setup error:", error);
+        
+        // Return proper error response
+        if (!res.headersSent) {
+          res.status(400).json({ 
+            error: error.message,
+            details: "Token validation or server setup failed"
+          });
+        }
+      }
+    });
 
-//       if (allData.length > 1) {
-//         console.warn('⚠️ Multiple accounts found with same ID:', allData);
-//         console.log('🔧 Using first account from duplicates');
-//       }
+    // FIXED: Companion POST endpoint for JSON-RPC calls
+    app.post("/messages", async (req, res) => {
+      try {
+        const sessionId = req.query.sessionId;
+        const transport = transports[sessionId];
+        const server = servers[sessionId];
 
-//       const userData = allData[0];
+        console.log(`POST /messages for session: ${sessionId}`);
+
+        if (transport && server) {
+          await transport.handlePostMessage(req, res);
+        } else {
+          console.error(`No transport/server found for sessionId: ${sessionId}`);
+          res.status(400).json({ 
+            error: "No transport/server found for sessionId",
+            sessionId: sessionId,
+            availableSessions: Object.keys(transports)
+          });
+        }
+      } catch (error) {
+        console.error("POST /messages error:", error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    // Handle Render health checks
+    app.get("/", (req, res) => {
+      res.json({ 
+        status: "ok", 
+        server: SERVER_NAME,
+        message: "MCP Server is running"
+      });
+    });
+    app.get("/health", (req, res) => {
+      res.json({ 
+        status: "ok", 
+        server: SERVER_NAME, 
+        activeSessions: Object.keys(transports).length,
+        availableSessions: Object.keys(transports),
+        headers: req.headers,
+        url: req.url
+      });
+    });
+
+    // Debug endpoint to test SSE without token
+    app.get("/sse-test", (req, res) => {
+      console.log("SSE test endpoint hit");
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('X-Accel-Buffering', 'no');
       
-//       if (!userData.user_id) {
-//         throw new Error(`Account ${accountIdStr} found but has no associated user_id`);
-//       }
+      res.write('data: {"test": "connection working"}\n\n');
       
-//       console.log('✅ Found user ID:', userData.user_id, 'for account:', userData.name);
-//       return userData.user_id;
-//     } catch (error) {
-//       console.error('💥 Error in getUserFromAccount:', error);
-//       throw error;
-//     }
-//   };
+      // Keep connection alive for 10 seconds
+      const interval = setInterval(() => {
+        res.write(`data: {"time": "${new Date().toISOString()}"}\n\n`);
+      }, 1000);
+      
+      setTimeout(() => {
+        clearInterval(interval);
+        res.end();
+      }, 10000);
+    });
 
-//   // Helper function to get Facebook token (defined inside executeFunction)
-//   const getFacebookToken = async (supabase, userId) => {
-//     console.log('🔍 Attempting to get Facebook token for userId:', userId);
-    
-//     if (!userId) {
-//       throw new Error('User ID is required');
-//     }
+    // Add error handling middleware
+    app.use((err, req, res, next) => {
+      console.error('Express error:', err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Internal server error' });
+      }
+    });
 
-//     if (!supabase) {
-//       throw new Error('Supabase client is required');
-//     }
+    const port = process.env.PORT || 3001;
+    app.listen(port, () => {
+      console.log(`MCP Server running on port ${port}`);
+      console.log(`Health check: http://localhost:${port}/health`);
+      console.log(`SSE endpoint: http://localhost:${port}/sse?token=<your-token>`);
+    });
+  } else {
+    // stdio mode: single session over stdin/stdout
+    const server = new Server(
+      { name: SERVER_NAME, version: "0.1.0" },
+      { capabilities: { tools: {} } }
+    );
+    server.onerror = (err) => console.error("[MCP Error]", err);
 
-//     try {
-//       console.log('📡 Making Supabase query...');
-//       const { data, error } = await supabase
-//         .from('users')
-//         .select('facebook_long_lived_token')
-//         .eq('id', userId)
-//         .single();
+    await setupServerHandlers(server, tools);
 
-//       console.log('📊 Supabase response:', { data, error });
+    process.on("SIGINT", async () => {
+      await server.close();
+      process.exit(0);
+    });
 
-//       if (error) {
-//         console.error('❌ Supabase error:', error);
-//         throw new Error(`Supabase query failed: ${error.message}`);
-//       }
+    const transport = new (await import("@modelcontextprotocol/sdk/server/stdio.js"))
+      .StdioServerTransport();
+    await server.connect(transport);
+  }
+}
 
-//       if (!data) {
-//         console.warn('⚠️ No user found with ID:', userId);
-//         return null;
-//       }
-
-//       if (!data.facebook_long_lived_token) {
-//         console.warn('⚠️ User found but no Facebook token for user ID:', userId);
-//         return null;
-//       }
-
-//       console.log('✅ Facebook token retrieved successfully');
-//       return data.facebook_long_lived_token;
-//     } catch (error) {
-//       console.error('💥 Error in getFacebookToken:', error);
-//       throw error;
-//     }
-//   };
-
-//   // Now execute the main function logic
-//   const API_VERSION = process.env.FACEBOOK_API_VERSION || 'v23.0';
-//   const baseUrl = `https://graph.facebook.com/${API_VERSION}`;
-  
-//   // Validate required params
-//   if (!account_id) {
-//     return { 
-//       error: 'Missing required parameter: account_id' 
-//     };
-//   }
-
-//   if (!objective) {
-//     return { 
-//       error: 'Missing required parameter: objective. Please choose from: OUTCOME_ENGAGEMENT, OUTCOME_LEADS, OUTCOME_SALES, OUTCOME_AWARENESS, OUTCOME_TRAFFIC, OUTCOME_APP_PROMOTION' 
-//     };
-//   }
-
-//   // Validate objective is one of the allowed values
-//   const validObjectives = [
-//     'OUTCOME_ENGAGEMENT', 
-//     'OUTCOME_LEADS', 
-//     'OUTCOME_SALES', 
-//     'OUTCOME_AWARENESS', 
-//     'OUTCOME_TRAFFIC', 
-//     'OUTCOME_APP_PROMOTION'
-//   ];
-  
-//   if (!validObjectives.includes(objective)) {
-//     return {
-//       error: `Invalid objective: ${objective}. Must be one of: ${validObjectives.join(', ')}`
-//     };
-//   }
-
-//   // Normalize the objective (trim whitespace)
-//   const normalizedObjective = objective.trim();
-
-//   if (campaign_budget_optimization === true) {
-//     const hasLifetime = Number(lifetime_budget) > 0;
-//     const hasDaily = Number(daily_budget) > 0;
-  
-//     if (!hasLifetime && !hasDaily) {
-//       return {
-//         error: 'Validation error: When campaign_budget_optimization is true, you must provide either lifetime_budget or daily_budget (> 0).',
-//         details: { campaign_budget_optimization, daily_budget, lifetime_budget }
-//       };
-//     }
-//   }
-
-//   // Debug input parameters
-//   console.log('📥 Input parameters received:', {
-//     account_id,
-//     objective: normalizedObjective,
-//     special_ad_categories: {
-//       value: special_ad_categories,
-//       type: typeof special_ad_categories,
-//       isArray: Array.isArray(special_ad_categories),
-//       length: Array.isArray(special_ad_categories) ? special_ad_categories.length : 'N/A'
-//     }
-//   });
-
-//   try {
-//     console.log('🔍 Processing campaign creation for account:', account_id);
-
-//     // Step 1: Find the user who owns this ad account
-//     const userId = await getUserFromAccount(supabase, account_id);
-    
-//     // Step 2: Get Facebook token for that user
-//     const token = await getFacebookToken(supabase, userId);
-    
-//     if (!token) {
-//       return { 
-//         error: 'No Facebook access token found for the user who owns this ad account',
-//         details: `Account ${account_id} belongs to user ${userId} but they have no Facebook token`
-//       };
-//     }
-
-//     // Generate campaign name with timestamp if not provided
-//     const campaignName = name || `Campaign ${normalizedObjective} ${new Date().toISOString()}`;
-    
-//     // Calculate stop_time (7 days from now)
-//     const stopTime = new Date();
-//     stopTime.setDate(stopTime.getDate() + 7);
-
-//     const url = `${baseUrl}/act_${account_id}/campaigns`;
-    
-//     // Log the parameters for debugging
-//     console.log('📋 Campaign parameters before processing:', {
-//       objective: normalizedObjective,
-//       special_ad_categories,
-//       type: typeof special_ad_categories,
-//       isArray: Array.isArray(special_ad_categories)
-//     });
-
-//     const campaignParams = {
-//       name: campaignName,
-//       objective: normalizedObjective, // Now uses the properly validated and normalized objective
-//       status,
-//       buying_type,
-//       stop_time: stopTime.toISOString(),
-//       access_token: token
-//     };
-
-//     // Handle special_ad_categories - try different approaches based on client behavior
-//     const specialAdCategoriesForApi =
-//     Array.isArray(special_ad_categories) && special_ad_categories.length > 0
-//       ? JSON.stringify(special_ad_categories)
-//       : JSON.stringify(['NONE']);
-//   campaignParams.special_ad_categories = specialAdCategoriesForApi;
-
-//     // Campaign Budget Optimization (CBO) Logic
-//     if (campaign_budget_optimization) {
-//       campaignParams.bid_strategy = bid_strategy;
-//       if (lifetime_budget && Number(lifetime_budget) > 0) {
-//         campaignParams.lifetime_budget = String(lifetime_budget);
-//       } else if (daily_budget && Number(daily_budget) > 0) {
-//         campaignParams.daily_budget = String(daily_budget);
-//       }
-//     } else {
-//       // CBO disabled: No budget at campaign level (budgets will be set at ad set level)
-//       console.log('📊 Campaign Budget Optimization disabled - budgets will be set at ad set level');
-//       console.log('⚠️ Note: You must set budgets when creating ad sets for this campaign');
-//     }
-
-//     // Remove null/empty values
-//     for (const [k, v] of Object.entries(campaignParams)) {
-//       if (v == null || (typeof v === 'string' && v.trim() === '')) {
-//         delete campaignParams[k];
-//       }
-//     }
-
-//     const body = new URLSearchParams(campaignParams);
-
-//     console.log('🚀 Making Facebook API request to:', url);
-//     console.log('📋 Final campaign params being sent:', Object.fromEntries(body.entries()));
-
-//     const response = await fetch(url, {
-//       method: 'POST',
-//       headers: {
-//         'Content-Type': 'application/x-www-form-urlencoded'
-//       },
-//       body: body.toString()
-//     });
-
-//     if (!response.ok) {
-//       const errorData = await response.json();
-//       console.error('❌ Facebook API error:', errorData);
-//       return { 
-//         error: `Campaign creation failed: ${errorData.error?.message || 'Unknown error'}`,
-//         details: errorData 
-//       };
-//     }
-
-//     const result = await response.json();
-//     console.log('✅ Campaign created successfully:', result);
-    
-//     return {
-//       success: true,
-//       campaign: result,
-//       account_id,
-//       objective_used: normalizedObjective,
-//       budget_optimization: {
-//         cbo_enabled: campaign_budget_optimization,
-//         budget_level: campaign_budget_optimization ? 'campaign' : 'ad_set',
-//         budget_type: lifetime_budget && campaign_budget_optimization ? 'lifetime' : 'daily',
-//         budget_amount: campaign_budget_optimization ? (lifetime_budget || daily_budget) : null
-//       },
-//     };
-//   } catch (error) {
-//     console.error('💥 Error in executeFunction:', error);
-//     return { 
-//       error: 'An error occurred while creating the campaign.',
-//       details: error.message 
-//     };
-//   }
-// };
-
-// /**
-//  * Tool configuration for creating Facebook engagement campaigns
-//  * Definition is kept pure with no Node-only dependencies
-//  */
-// const apiTool = {
-//   function: executeFunction,
-//   definition: {
-//     type: 'function',
-//     function: {
-//       name: 'create-campaign-messages',
-//       description: 'Create a Facebook campaign with the specified objective. Choose the appropriate objective based on your campaign goals.',
-//       parameters: {
-//         type: 'object',
-//         properties: {
-//           account_id: {
-//             type: 'string',
-//             description: 'Facebook ad account ID (without act_ prefix) - automatically provided from MCP context'
-//           },
-//           objective: {
-//             type: 'string',
-//             enum: [
-//               'OUTCOME_ENGAGEMENT', 
-//               'OUTCOME_LEADS', 
-//               'OUTCOME_SALES', 
-//               'OUTCOME_AWARENESS', 
-//               'OUTCOME_TRAFFIC', 
-//               'OUTCOME_APP_PROMOTION'
-//             ],
-//             description: 'REQUIRED: Campaign objective. OUTCOME_ENGAGEMENT for messages/conversations, OUTCOME_LEADS for lead generation, OUTCOME_SALES for conversions, OUTCOME_AWARENESS for brand awareness, OUTCOME_TRAFFIC for website visits, OUTCOME_APP_PROMOTION for app installs/engagement'
-//           },
-//           name: {
-//             type: 'string',
-//             description: 'Campaign name (defaults to "Campaign {objective} {timestamp}")'
-//           },
-//           status: {
-//             type: 'string',
-//             enum: ['ACTIVE', 'PAUSED'],
-//             description: 'Campaign status (default: ACTIVE)'
-//           },
-//           special_ad_categories: {
-//             type: 'array',
-//             items: {
-//               type: 'string',
-//               enum: ['NONE', 'EMPLOYMENT', 'HOUSING', 'CREDIT', 'ISSUES_ELECTIONS_POLITICS', 'ONLINE_GAMBLING_AND_GAMING', 'FINANCIAL_PRODUCTS_SERVICES']
-//             },
-//             description: 'Special ad categories (default: ["NONE"])'
-//           },
-//           buying_type: {
-//             type: 'string',
-//             enum: ['AUCTION', 'RESERVED'],
-//             description: 'Buying type (default: AUCTION)'
-//           },
-//           bid_strategy: {
-//             type: 'string',
-//             enum: ['LOWEST_COST_WITHOUT_CAP', 'LOWEST_COST_WITH_BID_CAP', 'COST_CAP', 'LOWEST_COST_WITH_MIN_ROAS'],
-//             description: 'Bid strategy (default: LOWEST_COST_WITHOUT_CAP)'
-//           },
-//           daily_budget: {
-//             type: 'integer',
-//             description: 'Daily budget in cents (default: 1000 = $10/day). Used when campaign_budget_optimization is true and no lifetime_budget is set.'
-//           },
-//           lifetime_budget: {
-//             type: 'integer',
-//             description: 'Lifetime budget in cents. If set and campaign_budget_optimization is true, this overrides daily_budget.'
-//           },
-//           campaign_budget_optimization: {
-//             type: 'boolean',
-//             description: 'Enable Campaign Budget Optimization (CBO). When true, budget is set at campaign level and Facebook optimizes distribution across ad sets. When false, budgets must be set at ad set level. (default: true)'
-//           }
-//         },
-//         required: ['account_id', 'objective']
-//       }
-//     }
-//   }
-// };
-
-// export { apiTool };
+run().catch((err) => {
+  console.error("Server startup error:", err);
+  process.exit(1);
+});
