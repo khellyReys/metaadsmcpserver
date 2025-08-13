@@ -76,28 +76,6 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
     }
   }, [facebookAccessToken, currentUser]);
 
-  // SSE Connection for real-time updates
-  useEffect(() => {
-    let eventSource: EventSource | null = null;
-
-    const initConnection = async () => {
-      if (selectedServer && servers.length > 0) {
-        const serverData = servers.find(s => s.id === selectedServer);
-        if (serverData?.access_token) {
-          eventSource = connectToSSE(serverData.access_token);
-        }
-      }
-    };
-
-    initConnection();
-
-    return () => {
-      if (eventSource) {
-        eventSource.close();
-      }
-    };
-  }, [selectedServer, servers]);
-
   const fetchAndSaveBusinessAccounts = async () => {
     if (!facebookAccessToken || !currentUser) return;
   
@@ -362,53 +340,6 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
     setCurrentStep('business');
     setSelectedAdAccount('');
     setAdAccounts([]);
-  };
-
-  // SSE Connection
-  const connectToSSE = (accessToken: string) => {
-    if (!accessToken) {
-      return null;
-    }
-
-    const serverId = selectedServer;
-    const tokenString = `${serverId}:${accessToken}`;
-    const encodedToken = btoa(tokenString);
-    
-    const mcpServerUrl = import.meta.env.VITE_MCP_SERVER_URL || 'https://metaadsmcpserver.onrender.com';
-    const sseUrl = `${mcpServerUrl}/sse?token=${encodeURIComponent(encodedToken)}`;
-
-    try {
-      const eventSource = new EventSource(sseUrl);
-
-      eventSource.onopen = () => {
-        onClearError();
-      };
-
-      eventSource.onmessage = (event) => {
-        
-        try {
-          if (event.data.startsWith('{')) {
-            const data = JSON.parse(event.data);
-          }
-        } catch (parseError) {
-        }
-      };
-
-      eventSource.onerror = (event) => {
-        
-        switch (eventSource.readyState) {
-          case EventSource.CONNECTING:
-            break;
-          case EventSource.CLOSED:
-            break;
-        }
-      };
-
-      return eventSource;
-
-    } catch (error) {
-      return null;
-    }
   };
 
   return (
