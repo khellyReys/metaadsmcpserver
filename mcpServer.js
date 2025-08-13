@@ -103,8 +103,32 @@ async function setupServerHandlers(server, tools) {
   });
 }
 
+// Helper function to set SSE headers
+function setSSEHeaders(res, origin) {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("Access-Control-Allow-Origin", origin || "*");
+  res.setHeader("Access-Control-Allow-Credentials", "true");
+  res.setHeader("X-Accel-Buffering", "no"); // disable proxy buffering
+}
+
+// Helper function to send SSE error and close connection
+function sendSSEError(res, error, origin) {
+  if (!res.headersSent) {
+    setSSEHeaders(res, origin);
+  }
+  
+  res.write(`event: error\n`);
+  res.write(`data: ${JSON.stringify({ 
+    error: error.message || String(error),
+    timestamp: new Date().toISOString()
+  })}\n\n`);
+  res.end();
+}
+
 async function run() {
-  // TEMP keepalive so failures don’t insta-exit before logs flush
+  // TEMP keepalive so failures don't insta-exit before logs flush
   const keepalive = setInterval(() => {}, 1 << 30);
   process.on("exit", () => clearInterval(keepalive));
 
@@ -193,33 +217,52 @@ async function run() {
       res.status(200).end();
     });
 
-    // SSE handshake (creates a session)
-    app.get("/sse", async (resReq, res) => {
+    // SSE handshake (creates a session) - FIXED VERSION
+    app.get("/sse", async (req, res) => {
+      const origin = req.headers.origin;
+      
       try {
-        const token = resReq.query.token;
+        console.log("[SSE] Incoming connection from:", origin);
+        console.log("[SSE] Query params:", req.query);
+        
+        // Validate token first before setting headers
+        const token = req.query.token;
+        if (!token) {
+          throw new Error("Token parameter is required");
+        }
+        
         const tokenData = validateToken(token);
+        console.log("[SSE] Token validated for serverId:", tokenData.serverId);
 
-        // Explicit SSE/CORS headers
-        res.setHeader("Access-Control-Allow-Origin", resReq.headers.origin || "*");
-        res.setHeader("Access-Control-Allow-Credentials", "true");
-        res.setHeader("X-Accel-Buffering", "no"); // disable proxy buffering
+        // Set SSE headers immediately after validation
+        setSSEHeaders(res, origin);
 
+        // Create MCP server instance
         const server = new Server(
           { name: SERVER_NAME, version: "0.1.0" },
           { capabilities: { tools: {} } }
         );
-        server.onerror = (err) => console.error("[MCP server error]", err);
+        
+        server.onerror = (err) => {
+          console.error("[MCP server error]", err);
+          if (!res.headersSent) {
+            sendSSEError(res, err, origin);
+          }
+        };
 
+        // Setup request handlers
         await setupServerHandlers(server, tools);
 
+        // Create SSE transport
         const transport = new SSEServerTransport("/messages", res);
         transports[transport.sessionId] = transport;
         servers[transport.sessionId] = server;
 
-        console.log("[SSE] new session", transport.sessionId, "for", tokenData.serverId);
+        console.log("[SSE] New session created:", transport.sessionId, "for serverId:", tokenData.serverId);
 
+        // Handle connection close
         res.on("close", async () => {
-          console.log("[SSE] close", transport.sessionId);
+          console.log("[SSE] Connection closed for session:", transport.sessionId);
           delete transports[transport.sessionId];
           try {
             await server.close();
@@ -229,13 +272,22 @@ async function run() {
           delete servers[transport.sessionId];
         });
 
+        // Handle client disconnect
+        res.on("error", (error) => {
+          console.error("[SSE] Connection error:", error);
+          delete transports[transport.sessionId];
+          delete servers[transport.sessionId];
+        });
+
+        // Connect the server to transport
         await server.connect(transport);
+        console.log("[SSE] Server connected successfully for session:", transport.sessionId);
+
       } catch (error) {
         console.error("[/sse error]", error && error.stack ? error.stack : error);
-        res.status(400).json({
-          error: error.message || String(error),
-          details: "Token validation or server setup failed",
-        });
+        
+        // Send error as SSE event instead of JSON response
+        sendSSEError(res, error, origin);
       }
     });
 
@@ -249,6 +301,8 @@ async function run() {
         if (transport && server) {
           await transport.handlePostMessage(req, res);
         } else {
+          console.error("[/messages] No transport/server found for sessionId:", sessionId);
+          console.error("[/messages] Available sessions:", Object.keys(transports));
           res.status(400).json({
             error: "No transport/server found for sessionId",
             sessionId: sessionId,
@@ -261,11 +315,24 @@ async function run() {
       }
     });
 
+    // Catch-all error handler for Express
+    app.use((error, req, res, next) => {
+      console.error("[Express error handler]", error);
+      if (res.headersSent) {
+        return next(error);
+      }
+      res.status(500).json({
+        error: "Internal server error",
+        message: error.message
+      });
+    });
+
     const port = process.env.PORT || 3001;
     app.listen(port, () => {
       console.log(`MCP SSE server listening on http://localhost:${port}`);
       console.log(`Health: http://localhost:${port}/health`);
-      // Clear keepalive once we’re listening (server keeps event loop alive)
+      console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+      // Clear keepalive once we're listening (server keeps event loop alive)
       clearInterval(keepalive);
     });
   } else {
