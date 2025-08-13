@@ -113,12 +113,16 @@ async function run() {
     const transports = {};
     const servers = {};
 
-    // CRITICAL: Add CORS support
+    // FIXED: Use built-in CORS middleware with proper configuration
     app.use(cors({
-      origin: true, // Allow all origins for now
+      origin: (origin, callback) => {
+        // Allow all origins for now - you can restrict this later
+        callback(null, true);
+      },
       credentials: true,
-      methods: ["GET", "POST", "OPTIONS"],
-      allowedHeaders: ["Content-Type", "Authorization", "Cache-Control", "X-Requested-With"]
+      methods: ['GET', 'POST', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control', 'X-Requested-With'],
+      optionsSuccessStatus: 200
     }));
 
     // Add JSON parsing middleware (but skip for SSE endpoints)
@@ -142,7 +146,9 @@ async function run() {
 
     // Test SSE endpoint
     app.get("/test-sse", (req, res) => {
-      // CRITICAL: Set proper SSE headers
+      console.log('Test SSE endpoint accessed');
+      
+      // Set proper SSE headers
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
@@ -151,28 +157,29 @@ async function run() {
         'Access-Control-Allow-Credentials': 'true'
       });
       
-      res.write('data: {"message": "Test SSE working"}\n\n');
+      res.write('data: {"message": "Test SSE working", "timestamp": "' + new Date().toISOString() + '"}\n\n');
       
       const interval = setInterval(() => {
-        res.write(`data: {"time": "${new Date().toISOString()}"}\n\n`);
-      }, 2000);
+        res.write(`data: {"heartbeat": "${new Date().toISOString()}"}\n\n`);
+      }, 3000);
       
       req.on('close', () => {
+        console.log('Test SSE client disconnected');
         clearInterval(interval);
       });
     });
 
-    // FIXED: Main SSE endpoint with proper headers and token validation
+    // Main SSE endpoint with proper headers and token validation
     app.get("/sse", async (req, res) => {
-      console.log('SSE endpoint hit');
+      console.log('SSE endpoint accessed with token:', req.query.token ? 'present' : 'missing');
       
       try {
         // Validate token
         const token = req.query.token;
         const tokenData = validateToken(token);
-        console.log('Token validated for server:', tokenData.serverId);
+        console.log('Token validated for server ID:', tokenData.serverId);
 
-        // CRITICAL: Set SSE headers BEFORE creating transport
+        // Set SSE headers BEFORE creating transport
         res.writeHead(200, {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache',
@@ -181,6 +188,8 @@ async function run() {
           'Access-Control-Allow-Credentials': 'true',
           'X-Accel-Buffering': 'no'
         });
+
+        console.log('SSE headers set successfully');
 
         // Create a new Server instance for each session
         const server = new Server(
@@ -198,21 +207,23 @@ async function run() {
         server.onerror = (error) => console.error("[MCP Server Error]", error);
         await setupServerHandlers(server, tools);
 
+        console.log('MCP server handlers configured');
+
         const transport = new SSEServerTransport("/messages", res);
         transports[transport.sessionId] = transport;
         servers[transport.sessionId] = server;
 
-        console.log('SSE transport created, sessionId:', transport.sessionId);
+        console.log('SSE transport created with sessionId:', transport.sessionId);
 
         res.on("close", async () => {
-          console.log('SSE client disconnected, sessionId:', transport.sessionId);
+          console.log('SSE client disconnected, cleaning up sessionId:', transport.sessionId);
           delete transports[transport.sessionId];
           await server.close();
           delete servers[transport.sessionId];
         });
 
         await server.connect(transport);
-        console.log('MCP server connected successfully');
+        console.log('MCP server connected to transport successfully');
 
       } catch (error) {
         console.error('SSE setup error:', error);
@@ -228,17 +239,20 @@ async function run() {
       }
     });
 
+    // POST endpoint for messages
     app.post("/messages", async (req, res) => {
       try {
         const sessionId = req.query.sessionId;
         const transport = transports[sessionId];
         const server = servers[sessionId];
 
-        console.log('POST /messages, sessionId:', sessionId);
+        console.log('POST /messages called for sessionId:', sessionId);
+        console.log('Available sessions:', Object.keys(transports));
 
         if (transport && server) {
           await transport.handlePostMessage(req, res);
         } else {
+          console.error('No transport/server found for sessionId:', sessionId);
           res.status(400).json({
             error: "No transport/server found for sessionId",
             sessionId: sessionId,
@@ -251,20 +265,37 @@ async function run() {
       }
     });
 
-    // Handle OPTIONS requests
-    app.options("*", (req, res) => {
-      res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
-      res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cache-Control, X-Requested-With');
-      res.header('Access-Control-Allow-Credentials', 'true');
-      res.sendStatus(200);
+    // REMOVED: The problematic app.options("*", ...) handler that was causing the path-to-regexp error
+    // CORS is already handled by the cors() middleware above
+
+    // Basic 404 handler
+    app.use((req, res) => {
+      console.log('404 - Route not found:', req.method, req.path);
+      res.status(404).json({
+        error: 'Route not found',
+        method: req.method,
+        path: req.path,
+        availableRoutes: ['/health', '/test-sse', '/sse', '/messages']
+      });
+    });
+
+    // Error handler
+    app.use((error, req, res, next) => {
+      console.error('Express error:', error);
+      if (!res.headersSent) {
+        res.status(500).json({
+          error: 'Internal server error',
+          message: error.message
+        });
+      }
     });
 
     const port = process.env.PORT || 3001;
     app.listen(port, () => {
       console.log(`[SSE Server] running on port ${port}`);
-      console.log(`Health: http://localhost:${port}/health`);
+      console.log(`Health check: http://localhost:${port}/health`);
       console.log(`Test SSE: http://localhost:${port}/test-sse`);
+      console.log(`Main SSE: http://localhost:${port}/sse?token=YOUR_TOKEN`);
     });
   } else {
     // stdio mode: single server instance
@@ -292,4 +323,7 @@ async function run() {
   }
 }
 
-run().catch(console.error);
+run().catch((error) => {
+  console.error("Server startup failed:", error);
+  process.exit(1);
+});
