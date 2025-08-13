@@ -1,46 +1,50 @@
 #!/usr/bin/env node
 
+// ---- Early debug so we see *something* even if imports fail ----
+process.on('beforeExit', (code) => console.log('[beforeExit]', code));
+process.on('exit', (code) => console.log('[exit]', code));
+process.on('uncaughtException', (err) => console.error('[uncaughtException]', err));
+process.on('unhandledRejection', (err) => console.error('[unhandledRejection]', err));
+console.log('mcpServer.js starting…');
+
+// ---- ESM imports ----
 import dotenv from "dotenv";
 import express from "express";
 import cors from "cors";
+import path from "path";
+import { fileURLToPath } from "url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import {
   CallToolRequestSchema,
-  ErrorCode,
   ListToolsRequestSchema,
   McpError,
+  ErrorCode,
 } from "@modelcontextprotocol/sdk/types.js";
 import { discoverTools } from "./lib/tools.js";
 
-import path from "path";
-import { fileURLToPath } from "url";
+// ---- Env setup ----
+dotenv.config({
+  path: path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".env"),
+});
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-dotenv.config({ path: path.resolve(__dirname, ".env") });
-
+// ---- Constants ----
 const SERVER_NAME = "generated-mcp-server";
 
-// Token validation function
+// ---- Helpers ----
 function validateToken(token) {
   if (!token) {
     throw new Error("Token is required");
   }
-  
   try {
-    const decoded = Buffer.from(token, 'base64').toString('utf-8');
-    if (!decoded.includes(':')) {
+    const decoded = Buffer.from(String(token), "base64").toString("utf-8");
+    if (!decoded.includes(":")) {
       throw new Error("Invalid token format");
     }
-    
-    const [serverId, accessToken] = decoded.split(':');
+    const [serverId, accessToken] = decoded.split(":");
     if (!serverId || !accessToken) {
       throw new Error("Invalid token components");
     }
-    
     return { serverId, accessToken };
   } catch (error) {
     throw new Error(`Token validation failed: ${error.message}`);
@@ -50,280 +54,251 @@ function validateToken(token) {
 async function transformTools(tools) {
   return tools
     .map((tool) => {
-      const definitionFunction = tool.definition?.function;
-      if (!definitionFunction) return;
+      const fn = tool.definition?.function;
+      if (!fn) return null;
       return {
-        name: definitionFunction.name,
-        description: definitionFunction.description,
-        inputSchema: definitionFunction.parameters,
+        name: fn.name,
+        description: fn.description,
+        inputSchema: fn.parameters,
       };
     })
     .filter(Boolean);
 }
 
 async function setupServerHandlers(server, tools) {
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: await transformTools(tools),
-  }));
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    const t = await transformTools(tools);
+    return { tools: t };
+  });
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const toolName = request.params.name;
-    const tool = tools.find((t) => t.definition.function.name === toolName);
+    const name = request.params.name;
+    const tool = tools.find((t) => t.definition.function.name === name);
     if (!tool) {
-      throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${toolName}`);
+      throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
     }
-    const args = request.params.arguments;
-    const requiredParameters =
-      tool.definition?.function?.parameters?.required || [];
-    for (const requiredParameter of requiredParameters) {
-      if (!(requiredParameter in args)) {
+
+    const args = request.params.arguments ?? {};
+    const required = tool.definition.function.parameters.required || [];
+    for (const param of required) {
+      if (!(param in args)) {
         throw new McpError(
           ErrorCode.InvalidParams,
-          `Missing required parameter: ${requiredParameter}`
+          `Missing required parameter: ${param}`
         );
       }
     }
+
     try {
       const result = await tool.function(args);
       return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(result, null, 2),
-          },
-        ],
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
       };
-    } catch (error) {
-      console.error("[Error] Failed to fetch data:", error);
+    } catch (err) {
       throw new McpError(
         ErrorCode.InternalError,
-        `API error: ${error.message}`
+        `Tool execution failed: ${err.message}`
       );
     }
   });
 }
 
 async function run() {
-  const args = process.argv.slice(2);
-  const isSSE = args.includes("--sse");
-  const tools = await discoverTools();
+  // TEMP keepalive so failures don’t insta-exit before logs flush
+  const keepalive = setInterval(() => {}, 1 << 30);
+  process.on("exit", () => clearInterval(keepalive));
+
+  // Node version sanity
+  const [major] = process.versions.node.split(".").map(Number);
+  if (Number.isFinite(major) && major < 18) {
+    throw new Error(`Node 18+ required. You are on ${process.version}`);
+  }
+
+  const isSSE = process.argv.includes("--sse");
+  console.log("[mode]", isSSE ? "SSE" : "STDIO");
+
+  // Load tools (common crash point)
+  let tools = [];
+  try {
+    tools = await discoverTools();
+    console.log("[discoverTools] loaded", tools.length, "tools");
+  } catch (e) {
+    console.error(
+      "[discoverTools] failed:",
+      e && e.stack ? e.stack : e
+    );
+    tools = [];
+  }
 
   if (isSSE) {
     const app = express();
+
+    // In-memory session registry
     const transports = {};
     const servers = {};
 
-    // FIXED: Use built-in CORS middleware with proper configuration
-    app.use(cors({
-      origin: (origin, callback) => {
-        // Allow all origins for now - you can restrict this later
-        callback(null, true);
-      },
-      credentials: true,
-      methods: ['GET', 'POST', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control', 'X-Requested-With'],
-      optionsSuccessStatus: 200
-    }));
+    // CORS (adjust to your frontend origins)
+    const allowedOrigins = [
+      "http://localhost:3000",
+      "https://localhost:3000",
+      "http://localhost:5173",
+      "https://localhost:5173",
+      "https://metaadsmcpserver-1.onrender.com",
+    ];
 
-    // Add JSON parsing middleware (but skip for SSE endpoints)
+    app.use(
+      cors({
+        origin: (incomingOrigin, callback) => {
+          if (!incomingOrigin) return callback(null, true);
+          if (allowedOrigins.includes(incomingOrigin)) return callback(null, true);
+          return callback(new Error(`Origin ${incomingOrigin} not allowed by CORS`));
+        },
+        methods: ["GET", "POST", "OPTIONS"],
+        allowedHeaders: [
+          "Content-Type",
+          "Authorization",
+          "Cache-Control",
+          "X-Requested-With",
+        ],
+        credentials: true,
+      })
+    );
+
+    // Only parse JSON for non-/messages routes (SDK uses raw body)
     app.use((req, res, next) => {
-      if (req.path === "/messages" || req.path === "/sse") {
-        next();
-      } else {
-        express.json()(req, res, next);
-      }
+      if (req.path === "/messages") return next();
+      return express.json()(req, res, next);
     });
 
-    // Health check endpoint
+    // Health
     app.get("/health", (req, res) => {
       res.json({
         status: "ok",
         server: SERVER_NAME,
         activeSessions: Object.keys(transports).length,
-        timestamp: new Date().toISOString()
+        node: process.version,
+        mode: "SSE",
       });
     });
 
-    // Test SSE endpoint
-    app.get("/test-sse", (req, res) => {
-      console.log('Test SSE endpoint accessed');
-      
-      // Set proper SSE headers
-      res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-        'Access-Control-Allow-Origin': req.headers.origin || '*',
-        'Access-Control-Allow-Credentials': 'true'
-      });
-      
-      res.write('data: {"message": "Test SSE working", "timestamp": "' + new Date().toISOString() + '"}\n\n');
-      
-      const interval = setInterval(() => {
-        res.write(`data: {"heartbeat": "${new Date().toISOString()}"}\n\n`);
-      }, 3000);
-      
-      req.on('close', () => {
-        console.log('Test SSE client disconnected');
-        clearInterval(interval);
-      });
+    // Preflight
+    app.options("/sse", (req, res) => {
+      res.setHeader("Access-Control-Allow-Origin", req.headers.origin || "*");
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      res.setHeader(
+        "Access-Control-Allow-Headers",
+        "Content-Type, Authorization, Cache-Control, X-Requested-With"
+      );
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+      res.status(200).end();
     });
 
-    // Main SSE endpoint with proper headers and token validation
-    app.get("/sse", async (req, res) => {
-      console.log('SSE endpoint accessed with token:', req.query.token ? 'present' : 'missing');
-      
+    // SSE handshake (creates a session)
+    app.get("/sse", async (resReq, res) => {
       try {
-        // Validate token
-        const token = req.query.token;
+        const token = resReq.query.token;
         const tokenData = validateToken(token);
-        console.log('Token validated for server ID:', tokenData.serverId);
 
-        // Set SSE headers BEFORE creating transport
-        res.writeHead(200, {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          'Connection': 'keep-alive',
-          'Access-Control-Allow-Origin': req.headers.origin || '*',
-          'Access-Control-Allow-Credentials': 'true',
-          'X-Accel-Buffering': 'no'
-        });
+        // Explicit SSE/CORS headers
+        res.setHeader("Access-Control-Allow-Origin", resReq.headers.origin || "*");
+        res.setHeader("Access-Control-Allow-Credentials", "true");
+        res.setHeader("X-Accel-Buffering", "no"); // disable proxy buffering
 
-        console.log('SSE headers set successfully');
-
-        // Create a new Server instance for each session
         const server = new Server(
-          {
-            name: SERVER_NAME,
-            version: "0.1.0",
-          },
-          {
-            capabilities: {
-              tools: {},
-            },
-          }
+          { name: SERVER_NAME, version: "0.1.0" },
+          { capabilities: { tools: {} } }
         );
-        
-        server.onerror = (error) => console.error("[MCP Server Error]", error);
-        await setupServerHandlers(server, tools);
+        server.onerror = (err) => console.error("[MCP server error]", err);
 
-        console.log('MCP server handlers configured');
+        await setupServerHandlers(server, tools);
 
         const transport = new SSEServerTransport("/messages", res);
         transports[transport.sessionId] = transport;
         servers[transport.sessionId] = server;
 
-        console.log('SSE transport created with sessionId:', transport.sessionId);
+        console.log("[SSE] new session", transport.sessionId, "for", tokenData.serverId);
 
         res.on("close", async () => {
-          console.log('SSE client disconnected, cleaning up sessionId:', transport.sessionId);
+          console.log("[SSE] close", transport.sessionId);
           delete transports[transport.sessionId];
-          await server.close();
+          try {
+            await server.close();
+          } catch (e) {
+            console.error("[server.close error]", e);
+          }
           delete servers[transport.sessionId];
         });
 
         await server.connect(transport);
-        console.log('MCP server connected to transport successfully');
-
       } catch (error) {
-        console.error('SSE setup error:', error);
-        
-        if (!res.headersSent) {
-          res.status(400).json({
-            error: error.message,
-            details: "Token validation or server setup failed"
-          });
-        } else {
-          res.end();
-        }
+        console.error("[/sse error]", error && error.stack ? error.stack : error);
+        res.status(400).json({
+          error: error.message || String(error),
+          details: "Token validation or server setup failed",
+        });
       }
     });
 
-    // POST endpoint for messages
+    // JSON-RPC companion endpoint
     app.post("/messages", async (req, res) => {
       try {
         const sessionId = req.query.sessionId;
         const transport = transports[sessionId];
         const server = servers[sessionId];
 
-        console.log('POST /messages called for sessionId:', sessionId);
-        console.log('Available sessions:', Object.keys(transports));
-
         if (transport && server) {
           await transport.handlePostMessage(req, res);
         } else {
-          console.error('No transport/server found for sessionId:', sessionId);
           res.status(400).json({
             error: "No transport/server found for sessionId",
             sessionId: sessionId,
-            availableSessions: Object.keys(transports)
+            availableSessions: Object.keys(transports),
           });
         }
       } catch (error) {
-        console.error('POST /messages error:', error);
-        res.status(500).json({ error: error.message });
-      }
-    });
-
-    // REMOVED: The problematic app.options("*", ...) handler that was causing the path-to-regexp error
-    // CORS is already handled by the cors() middleware above
-
-    // Basic 404 handler
-    app.use((req, res) => {
-      console.log('404 - Route not found:', req.method, req.path);
-      res.status(404).json({
-        error: 'Route not found',
-        method: req.method,
-        path: req.path,
-        availableRoutes: ['/health', '/test-sse', '/sse', '/messages']
-      });
-    });
-
-    // Error handler
-    app.use((error, req, res, next) => {
-      console.error('Express error:', error);
-      if (!res.headersSent) {
-        res.status(500).json({
-          error: 'Internal server error',
-          message: error.message
-        });
+        console.error("[/messages error]", error && error.stack ? error.stack : error);
+        res.status(500).json({ error: error.message || String(error) });
       }
     });
 
     const port = process.env.PORT || 3001;
     app.listen(port, () => {
-      console.log(`[SSE Server] running on port ${port}`);
-      console.log(`Health check: http://localhost:${port}/health`);
-      console.log(`Test SSE: http://localhost:${port}/test-sse`);
-      console.log(`Main SSE: http://localhost:${port}/sse?token=YOUR_TOKEN`);
+      console.log(`MCP SSE server listening on http://localhost:${port}`);
+      console.log(`Health: http://localhost:${port}/health`);
+      // Clear keepalive once we’re listening (server keeps event loop alive)
+      clearInterval(keepalive);
     });
   } else {
-    // stdio mode: single server instance
+    // STDIO mode (single session over stdin/stdout)
     const server = new Server(
-      {
-        name: SERVER_NAME,
-        version: "0.1.0",
-      },
-      {
-        capabilities: {
-          tools: {},
-        },
-      }
+      { name: SERVER_NAME, version: "0.1.0" },
+      { capabilities: { tools: {} } }
     );
-    server.onerror = (error) => console.error("[Error]", error);
+    server.onerror = (err) => console.error("[MCP Error]", err);
+
     await setupServerHandlers(server, tools);
 
     process.on("SIGINT", async () => {
-      await server.close();
-      process.exit(0);
+      try {
+        await server.close();
+      } finally {
+        process.exit(0);
+      }
     });
 
+    const { StdioServerTransport } = await import(
+      "@modelcontextprotocol/sdk/server/stdio.js"
+    );
     const transport = new StdioServerTransport();
+    console.log("[stdio] waiting for client on stdin/stdout…");
+    // Clear keepalive once connected (stdio keeps process alive while attached)
     await server.connect(transport);
+    clearInterval(keepalive);
   }
 }
 
-run().catch((error) => {
-  console.error("Server startup failed:", error);
+// ---- Entry with loud error logging ----
+run().catch((err) => {
+  console.error("[run error]", err && err.stack ? err.stack : err);
   process.exit(1);
 });
