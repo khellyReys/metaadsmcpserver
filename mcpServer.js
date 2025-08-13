@@ -3,24 +3,24 @@
 import dotenv from "dotenv";
 import express from "express";
 import cors from "cors";
-import path from "path";
-import { fileURLToPath } from "url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import {
   CallToolRequestSchema,
+  ErrorCode,
   ListToolsRequestSchema,
   McpError,
-  ErrorCode,
 } from "@modelcontextprotocol/sdk/types.js";
 import { discoverTools } from "./lib/tools.js";
 
-dotenv.config({
-  path: path.resolve(
-    path.dirname(fileURLToPath(import.meta.url)),
-    ".env"
-  ),
-});
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+dotenv.config({ path: path.resolve(__dirname, ".env") });
 
 const SERVER_NAME = "generated-mcp-server";
 
@@ -31,11 +31,7 @@ function validateToken(token) {
   }
   
   try {
-    // Decode the base64 token
     const decoded = Buffer.from(token, 'base64').toString('utf-8');
-    
-    // Add your token validation logic here
-    // For example, check if it contains expected server ID and access token
     if (!decoded.includes(':')) {
       throw new Error("Invalid token format");
     }
@@ -54,12 +50,12 @@ function validateToken(token) {
 async function transformTools(tools) {
   return tools
     .map((tool) => {
-      const fn = tool.definition?.function;
-      if (!fn) return null;
+      const definitionFunction = tool.definition?.function;
+      if (!definitionFunction) return;
       return {
-        name: fn.name,
-        description: fn.description,
-        inputSchema: fn.parameters,
+        name: definitionFunction.name,
+        description: definitionFunction.description,
+        inputSchema: definitionFunction.parameters,
       };
     })
     .filter(Boolean);
@@ -71,23 +67,22 @@ async function setupServerHandlers(server, tools) {
   }));
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    const name = request.params.name;
-    const tool = tools.find((t) => t.definition.function.name === name);
+    const toolName = request.params.name;
+    const tool = tools.find((t) => t.definition.function.name === toolName);
     if (!tool) {
-      throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
+      throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${toolName}`);
     }
-
     const args = request.params.arguments;
-    const required = tool.definition.function.parameters.required || [];
-    for (const param of required) {
-      if (!(param in args)) {
+    const requiredParameters =
+      tool.definition?.function?.parameters?.required || [];
+    for (const requiredParameter of requiredParameters) {
+      if (!(requiredParameter in args)) {
         throw new McpError(
           ErrorCode.InvalidParams,
-          `Missing required parameter: ${param}`
+          `Missing required parameter: ${requiredParameter}`
         );
       }
     }
-
     try {
       const result = await tool.function(args);
       return {
@@ -98,17 +93,19 @@ async function setupServerHandlers(server, tools) {
           },
         ],
       };
-    } catch (err) {
+    } catch (error) {
+      console.error("[Error] Failed to fetch data:", error);
       throw new McpError(
         ErrorCode.InternalError,
-        `Tool execution failed: ${err.message}`
+        `API error: ${error.message}`
       );
     }
   });
 }
 
 async function run() {
-  const isSSE = process.argv.includes("--sse");
+  const args = process.argv.slice(2);
+  const isSSE = args.includes("--sse");
   const tools = await discoverTools();
 
   if (isSSE) {
@@ -116,73 +113,36 @@ async function run() {
     const transports = {};
     const servers = {};
 
-    // Updated allowed origins to include your frontend
-    const allowedOrigins = [
-      "http://localhost:3000",           // Your React dev server
-      "https://localhost:3000",          // HTTPS localhost
-      "http://localhost:5173",           // Vite default
-      "https://localhost:5173",          // HTTPS Vite
-      "https://metaadsmcpserver-1.onrender.com", // Replace with your actual frontend domain
-      "http://127.0.0.1:3000",          // Alternative localhost
-      "http://127.0.0.1:5173"           // Alternative localhost for Vite
-    ];
-    
-    // Improved CORS configuration
-    app.use(
-      cors({
-        origin: (incomingOrigin, callback) => {
-          console.log('CORS check for origin:', incomingOrigin);
-          
-          // Allow requests with no origin (like mobile apps or curl)
-          if (!incomingOrigin) {
-            callback(null, true);
-            return;
-          }
-          
-          if (allowedOrigins.includes(incomingOrigin)) {
-            callback(null, true);
-          } else {
-            console.log(`Origin ${incomingOrigin} not in allowed list:`, allowedOrigins);
-            // Temporarily allow all origins for debugging - comment out the line below in production
-            callback(null, true);
-            // callback(new Error(`Origin ${incomingOrigin} not allowed by CORS`));
-          }
-        },
-        methods: ["GET", "POST", "OPTIONS"],
-        allowedHeaders: [
-          "Content-Type", 
-          "Authorization", 
-          "Cache-Control", 
-          "X-Requested-With",
-          "Accept"
-        ],
-        credentials: true,
-      })
-    );
+    // CRITICAL: Add CORS support
+    app.use(cors({
+      origin: true, // Allow all origins for now
+      credentials: true,
+      methods: ["GET", "POST", "OPTIONS"],
+      allowedHeaders: ["Content-Type", "Authorization", "Cache-Control", "X-Requested-With"]
+    }));
 
-    // Middleware to skip JSON parsing for SSE endpoints
+    // Add JSON parsing middleware (but skip for SSE endpoints)
     app.use((req, res, next) => {
       if (req.path === "/messages" || req.path === "/sse") {
-        next(); // skip JSON parsing for SSE
+        next();
       } else {
         express.json()(req, res, next);
       }
     });
 
-    // Basic test endpoint
-    app.get("/test", (req, res) => {
+    // Health check endpoint
+    app.get("/health", (req, res) => {
       res.json({
-        message: "Server is working",
-        timestamp: new Date().toISOString(),
+        status: "ok",
         server: SERVER_NAME,
-        environment: process.env.NODE_ENV || 'development'
+        activeSessions: Object.keys(transports).length,
+        timestamp: new Date().toISOString()
       });
     });
 
-    // Simple SSE test endpoint
+    // Test SSE endpoint
     app.get("/test-sse", (req, res) => {
-      console.log('Test SSE endpoint hit');
-      
+      // CRITICAL: Set proper SSE headers
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
@@ -191,32 +151,28 @@ async function run() {
         'Access-Control-Allow-Credentials': 'true'
       });
       
-      // Send initial connection message
-      res.write('data: {"message": "SSE connection established", "timestamp": "' + new Date().toISOString() + '"}\n\n');
+      res.write('data: {"message": "Test SSE working"}\n\n');
       
-      // Send periodic heartbeat
       const interval = setInterval(() => {
-        res.write(`data: {"heartbeat": "${new Date().toISOString()}"}\n\n`);
-      }, 5000);
+        res.write(`data: {"time": "${new Date().toISOString()}"}\n\n`);
+      }, 2000);
       
-      // Clean up on disconnect
       req.on('close', () => {
-        console.log('Test SSE client disconnected');
         clearInterval(interval);
       });
     });
 
-    // FIXED: SSE endpoint with proper headers
+    // FIXED: Main SSE endpoint with proper headers and token validation
     app.get("/sse", async (req, res) => {
-      console.log('SSE endpoint hit with token:', req.query.token ? 'present' : 'missing');
+      console.log('SSE endpoint hit');
       
       try {
-        // Validate token from query parameter
+        // Validate token
         const token = req.query.token;
         const tokenData = validateToken(token);
-        console.log('Token validated successfully for server:', tokenData.serverId);
-        
-        // CRITICAL: Set SSE headers FIRST, before any other operations
+        console.log('Token validated for server:', tokenData.serverId);
+
+        // CRITICAL: Set SSE headers BEFORE creating transport
         res.writeHead(200, {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache',
@@ -225,80 +181,65 @@ async function run() {
           'Access-Control-Allow-Credentials': 'true',
           'X-Accel-Buffering': 'no'
         });
-        
-        console.log('SSE headers set successfully');
 
-        // Create MCP server instance
+        // Create a new Server instance for each session
         const server = new Server(
-          { name: SERVER_NAME, version: "0.1.0" },
-          { capabilities: { tools: {} } }
+          {
+            name: SERVER_NAME,
+            version: "0.1.0",
+          },
+          {
+            capabilities: {
+              tools: {},
+            },
+          }
         );
         
-        server.onerror = (err) => {
-          console.error('MCP Server error:', err);
-        };
-
+        server.onerror = (error) => console.error("[MCP Server Error]", error);
         await setupServerHandlers(server, tools);
-        console.log('MCP server handlers setup complete');
 
-        // Create SSE transport - this should work now that headers are set
         const transport = new SSEServerTransport("/messages", res);
         transports[transport.sessionId] = transport;
         servers[transport.sessionId] = server;
-        
-        console.log('SSE transport created with sessionId:', transport.sessionId);
 
-        // Handle client disconnect
+        console.log('SSE transport created, sessionId:', transport.sessionId);
+
         res.on("close", async () => {
-          console.log('Client disconnected, cleaning up session:', transport.sessionId);
+          console.log('SSE client disconnected, sessionId:', transport.sessionId);
           delete transports[transport.sessionId];
           await server.close();
           delete servers[transport.sessionId];
         });
 
-        // Connect server to transport
         await server.connect(transport);
-        console.log('MCP server connected to SSE transport successfully');
-        
+        console.log('MCP server connected successfully');
+
       } catch (error) {
         console.error('SSE setup error:', error);
         
-        // Only send JSON error if headers haven't been sent yet
         if (!res.headersSent) {
-          res.status(400).json({ 
+          res.status(400).json({
             error: error.message,
             details: "Token validation or server setup failed"
           });
         } else {
-          // If headers are already sent, we need to close the connection
           res.end();
         }
       }
     });
 
-    // Handle preflight OPTIONS requests
-    app.options("/sse", (req, res) => {
-      res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cache-Control, X-Requested-With, Accept');
-      res.setHeader('Access-Control-Allow-Credentials', 'true');
-      res.status(200).end();
-    });
-
-    // Companion POST endpoint for JSON-RPC calls
     app.post("/messages", async (req, res) => {
       try {
         const sessionId = req.query.sessionId;
         const transport = transports[sessionId];
         const server = servers[sessionId];
 
-        console.log('POST /messages called with sessionId:', sessionId);
-        console.log('Available sessions:', Object.keys(transports));
+        console.log('POST /messages, sessionId:', sessionId);
 
         if (transport && server) {
           await transport.handlePostMessage(req, res);
         } else {
-          res.status(400).json({ 
+          res.status(400).json({
             error: "No transport/server found for sessionId",
             sessionId: sessionId,
             availableSessions: Object.keys(transports)
@@ -310,45 +251,35 @@ async function run() {
       }
     });
 
-    // Enhanced health check endpoint
-    app.get("/health", (req, res) => {
-      res.json({ 
-        status: "ok", 
-        server: SERVER_NAME, 
-        activeSessions: Object.keys(transports).length,
-        timestamp: new Date().toISOString(),
-        environment: process.env.NODE_ENV || 'development',
-        endpoints: ['/sse', '/messages', '/health', '/test', '/test-sse'],
-        availableSessions: Object.keys(transports)
-      });
-    });
-
-    // Catch-all route for debugging
-    app.use((req, res) => {
-      console.log('Unhandled route:', req.method, req.path);
-      res.status(404).json({
-        error: 'Route not found',
-        path: req.path,
-        method: req.method,
-        availableEndpoints: ['/sse', '/messages', '/health', '/test', '/test-sse']
-      });
+    // Handle OPTIONS requests
+    app.options("*", (req, res) => {
+      res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+      res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cache-Control, X-Requested-With');
+      res.header('Access-Control-Allow-Credentials', 'true');
+      res.sendStatus(200);
     });
 
     const port = process.env.PORT || 3001;
     app.listen(port, () => {
-      console.log(`MCP Server running on port ${port}`);
-      console.log(`Health check: http://localhost:${port}/health`);
+      console.log(`[SSE Server] running on port ${port}`);
+      console.log(`Health: http://localhost:${port}/health`);
       console.log(`Test SSE: http://localhost:${port}/test-sse`);
-      console.log(`Main SSE: http://localhost:${port}/sse?token=YOUR_TOKEN`);
     });
   } else {
-    // stdio mode: single session over stdin/stdout
+    // stdio mode: single server instance
     const server = new Server(
-      { name: SERVER_NAME, version: "0.1.0" },
-      { capabilities: { tools: {} } }
+      {
+        name: SERVER_NAME,
+        version: "0.1.0",
+      },
+      {
+        capabilities: {
+          tools: {},
+        },
+      }
     );
-    server.onerror = (err) => console.error("[MCP Error]", err);
-
+    server.onerror = (error) => console.error("[Error]", error);
     await setupServerHandlers(server, tools);
 
     process.on("SIGINT", async () => {
@@ -356,13 +287,9 @@ async function run() {
       process.exit(0);
     });
 
-    const transport = new (await import("@modelcontextprotocol/sdk/server/stdio.js"))
-      .StdioServerTransport();
+    const transport = new StdioServerTransport();
     await server.connect(transport);
   }
 }
 
-run().catch((err) => {
-  console.error("Server startup error:", err);
-  process.exit(1);
-});
+run().catch(console.error);
