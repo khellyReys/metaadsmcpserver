@@ -22,11 +22,13 @@ interface McpTool {
 interface AdToolsProps {
   accountId: string;
   secret: string;
+  serverId: string;
+  serverAccessToken: string;
 }
 
 const MCP_BASE_URL = import.meta.env.VITE_MCP_URL || "https://metaadsmcpserver.onrender.com";
 
-const AdTools: React.FC<AdToolsProps> = ({ accountId, secret }) => {
+const AdTools: React.FC<AdToolsProps> = ({ accountId, secret, serverId, serverAccessToken  }) => {
   // State hooks...
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All");
@@ -118,15 +120,18 @@ const AdTools: React.FC<AdToolsProps> = ({ accountId, secret }) => {
   }), [tools, searchTerm, selectedCategory]);
 
   // SSE URL & handshake - FIXED: using accountId instead of businessId
-  const sseUrl = useMemo(() => `${MCP_BASE_URL}/sse?token=${btoa(`${accountId}:${secret}`)}`, [accountId, secret]);
-  useEffect(() => {
-    // Close any previous connection first
-    esRef.current?.close();
+  const sseUrl = useMemo(() => {
+    const tokenString = `${serverId}:${serverAccessToken}`;
+    const encodedToken = btoa(tokenString);
+    return `${MCP_BASE_URL}/sse?token=${encodeURIComponent(encodedToken)}`;
+  }, [serverId, serverAccessToken]);
   
+  useEffect(() => {
+    esRef.current?.close();
     setConnecting(true);
     setError(null);
     setSessionPath(undefined);
-  
+
     const es = new EventSource(sseUrl);
     esRef.current = es;
   
