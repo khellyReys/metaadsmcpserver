@@ -116,7 +116,6 @@ async function run() {
     const transports = {};
     const servers = {};
 
-    // FIXED: Updated allowed origins to include your frontend
     const allowedOrigins = [
       "http://localhost:3000",           // Your React dev server
       "https://localhost:3000",          // HTTPS localhost
@@ -125,11 +124,10 @@ async function run() {
       "https://metaadsmcpserver-1.onrender.com" // Replace with your actual frontend domain
     ];
     
-    // FIXED: Improved CORS configuration
+    // CORS configuration
     app.use(
       cors({
         origin: (incomingOrigin, callback) => {
-          
           // Allow requests with no origin (like mobile apps or curl)
           if (!incomingOrigin) {
             callback(null, true);
@@ -139,6 +137,7 @@ async function run() {
           if (allowedOrigins.includes(incomingOrigin)) {
             callback(null, true);
           } else {
+            console.error(`CORS blocked origin: ${incomingOrigin}`);
             callback(new Error(`Origin ${incomingOrigin} not allowed by CORS`));
           }
         },
@@ -153,28 +152,71 @@ async function run() {
       })
     );
 
+    // Conditional JSON parsing middleware
     app.use((req, res, next) => {
       if (req.path === "/messages") {
-        next(); // skip JSON parsing
+        next(); // skip JSON parsing for SSE message handling
       } else {
         express.json()(req, res, next);
       }
     });
 
-    // FIXED: SSE endpoint with token validation
+    // FIXED: Proper OPTIONS handling for SSE endpoint
+    app.options("/sse", (req, res) => {
+      const origin = req.headers.origin;
+      if (!origin || allowedOrigins.includes(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin || '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cache-Control, X-Requested-With');
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+        res.status(200).end();
+      } else {
+        res.status(403).json({ error: 'Origin not allowed' });
+      }
+    });
+
+    // FIXED: SSE endpoint with proper headers
     app.get("/sse", async (req, res) => {
+      console.log(`SSE request from origin: ${req.headers.origin}`);
       
       try {
         // Validate token from query parameter
         const token = req.query.token;
         const tokenData = validateToken(token);
+        console.log(`Token validated for server: ${tokenData.serverId}`);
         
-        // Set CORS headers explicitly for SSE
-        res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+        // RENDER-SPECIFIC: Set headers to bypass Nginx buffering
+        const origin = req.headers.origin;
+        if (origin && allowedOrigins.includes(origin)) {
+          res.setHeader('Access-Control-Allow-Origin', origin);
+        }
         res.setHeader('Access-Control-Allow-Credentials', 'true');
         
-        // Disable proxy buffering so the SDK's headers go out immediately
-        res.setHeader("X-Accel-Buffering", "no");
+        // Critical SSE headers for Render's Nginx
+        res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+        res.setHeader('Connection', 'keep-alive');
+        res.setHeader('X-Accel-Buffering', 'no'); // Critical for Render's Nginx
+        
+        // Additional headers that can help with proxy issues
+        res.setHeader('Transfer-Encoding', 'chunked');
+        
+        // Immediately flush headers
+        res.flushHeaders();
+        
+        // Send initial connection event
+        res.write('data: {"type":"connection","status":"connected"}\n\n');
+        
+        // Send keepalive pings every 30 seconds to prevent Render timeout
+        const keepAliveInterval = setInterval(() => {
+          if (!res.destroyed) {
+            res.write('data: {"type":"ping","timestamp":' + Date.now() + '}\n\n');
+          } else {
+            clearInterval(keepAliveInterval);
+          }
+        }, 30000);
 
         // Create MCP server instance
         const server = new Server(
@@ -183,6 +225,7 @@ async function run() {
         );
         
         server.onerror = (err) => {
+          console.error("[MCP Server Error]", err);
         };
 
         await setupServerHandlers(server, tools);
@@ -192,31 +235,43 @@ async function run() {
         transports[transport.sessionId] = transport;
         servers[transport.sessionId] = server;
 
+        console.log(`SSE connection established. Session ID: ${transport.sessionId}`);
+
         // Handle client disconnect
         res.on("close", async () => {
+          console.log(`SSE connection closed. Session ID: ${transport.sessionId}`);
+          clearInterval(keepAliveInterval);
           delete transports[transport.sessionId];
           await server.close();
           delete servers[transport.sessionId];
+        });
+
+        // Handle connection errors
+        res.on("error", (err) => {
+          console.error("SSE connection error:", err);
         });
 
         // Connect server to transport
         await server.connect(transport);
         
       } catch (error) {
-        res.status(400).json({ 
-          error: error.message,
-          details: "Token validation or server setup failed"
-        });
+        console.error("SSE setup error:", error);
+        
+        // FIXED: Return proper error response with correct headers
+        if (!res.headersSent) {
+          const origin = req.headers.origin;
+          if (origin && allowedOrigins.includes(origin)) {
+            res.setHeader('Access-Control-Allow-Origin', origin);
+          }
+          res.setHeader('Access-Control-Allow-Credentials', 'true');
+          res.setHeader('Content-Type', 'application/json');
+          
+          res.status(400).json({ 
+            error: error.message,
+            details: "Token validation or server setup failed"
+          });
+        }
       }
-    });
-
-    // Handle preflight OPTIONS requests
-    app.options("/sse", (req, res) => {
-      res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cache-Control, X-Requested-With');
-      res.setHeader('Access-Control-Allow-Credentials', 'true');
-      res.status(200).end();
     });
 
     // FIXED: Companion POST endpoint for JSON-RPC calls
@@ -226,10 +281,12 @@ async function run() {
         const transport = transports[sessionId];
         const server = servers[sessionId];
 
+        console.log(`POST /messages for session: ${sessionId}`);
 
         if (transport && server) {
           await transport.handlePostMessage(req, res);
         } else {
+          console.error(`No transport/server found for sessionId: ${sessionId}`);
           res.status(400).json({ 
             error: "No transport/server found for sessionId",
             sessionId: sessionId,
@@ -237,21 +294,64 @@ async function run() {
           });
         }
       } catch (error) {
+        console.error("POST /messages error:", error);
         res.status(500).json({ error: error.message });
       }
     });
 
-    // Add a health check endpoint
+    // Handle Render health checks
+    app.get("/", (req, res) => {
+      res.json({ 
+        status: "ok", 
+        server: SERVER_NAME,
+        message: "MCP Server is running"
+      });
+    });
     app.get("/health", (req, res) => {
       res.json({ 
         status: "ok", 
         server: SERVER_NAME, 
-        activeSessions: Object.keys(transports).length
+        activeSessions: Object.keys(transports).length,
+        availableSessions: Object.keys(transports),
+        headers: req.headers,
+        url: req.url
       });
+    });
+
+    // Debug endpoint to test SSE without token
+    app.get("/sse-test", (req, res) => {
+      console.log("SSE test endpoint hit");
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
+      res.setHeader('Connection', 'keep-alive');
+      res.setHeader('X-Accel-Buffering', 'no');
+      
+      res.write('data: {"test": "connection working"}\n\n');
+      
+      // Keep connection alive for 10 seconds
+      const interval = setInterval(() => {
+        res.write(`data: {"time": "${new Date().toISOString()}"}\n\n`);
+      }, 1000);
+      
+      setTimeout(() => {
+        clearInterval(interval);
+        res.end();
+      }, 10000);
+    });
+
+    // Add error handling middleware
+    app.use((err, req, res, next) => {
+      console.error('Express error:', err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Internal server error' });
+      }
     });
 
     const port = process.env.PORT || 3001;
     app.listen(port, () => {
+      console.log(`MCP Server running on port ${port}`);
+      console.log(`Health check: http://localhost:${port}/health`);
+      console.log(`SSE endpoint: http://localhost:${port}/sse?token=<your-token>`);
     });
   } else {
     // stdio mode: single session over stdin/stdout
@@ -275,5 +375,6 @@ async function run() {
 }
 
 run().catch((err) => {
+  console.error("Server startup error:", err);
   process.exit(1);
 });
