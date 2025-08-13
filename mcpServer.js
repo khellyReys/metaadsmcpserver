@@ -24,14 +24,18 @@ dotenv.config({
 
 const SERVER_NAME = "generated-mcp-server";
 
-// Token validation function
+// Token validation function (add your own logic here)
 function validateToken(token) {
   if (!token) {
     throw new Error("Token is required");
   }
   
   try {
+    // Decode the base64 token
     const decoded = Buffer.from(token, 'base64').toString('utf-8');
+    
+    // Add your token validation logic here
+    // For example, check if it contains expected server ID and access token
     if (!decoded.includes(':')) {
       throw new Error("Invalid token format");
     }
@@ -112,101 +116,66 @@ async function run() {
     const transports = {};
     const servers = {};
 
+    // FIXED: Updated allowed origins to include your frontend
     const allowedOrigins = [
-      "http://localhost:3000",
-      "https://localhost:3000",
-      "http://localhost:5173",
-      "https://localhost:5173",
-      "https://metaadsmcpserver-1.onrender.com"
+      "http://localhost:3000",           // Your React dev server
+      "https://localhost:3000",          // HTTPS localhost
+      "http://localhost:5173",           // Vite default
+      "https://localhost:5173",          // HTTPS Vite
+      "https://metaadsmcpserver-1.onrender.com" // Replace with your actual frontend domain
     ];
     
-    // Global CORS - let this handle most CORS logic
-    app.use(cors({
-      origin: (incomingOrigin, callback) => {
-        if (!incomingOrigin || allowedOrigins.includes(incomingOrigin)) {
-          callback(null, true);
-        } else {
-          console.error(`CORS blocked origin: ${incomingOrigin}`);
-          callback(new Error(`Origin ${incomingOrigin} not allowed by CORS`));
-        }
-      },
-      methods: ["GET", "POST", "OPTIONS"],
-      allowedHeaders: ["Content-Type", "Authorization", "Cache-Control", "X-Requested-With"],
-      credentials: true,
-    }));
+    // FIXED: Improved CORS configuration
+    app.use(
+      cors({
+        origin: (incomingOrigin, callback) => {
+          
+          // Allow requests with no origin (like mobile apps or curl)
+          if (!incomingOrigin) {
+            callback(null, true);
+            return;
+          }
+          
+          if (allowedOrigins.includes(incomingOrigin)) {
+            callback(null, true);
+          } else {
+            callback(new Error(`Origin ${incomingOrigin} not allowed by CORS`));
+          }
+        },
+        methods: ["GET", "POST", "OPTIONS"],
+        allowedHeaders: [
+          "Content-Type", 
+          "Authorization", 
+          "Cache-Control", 
+          "X-Requested-With"
+        ],
+        credentials: true,
+      })
+    );
 
-    // RENDER FIX: Global middleware to add Nginx bypass header
-    app.use((req, res, next) => {
-      // Add the critical header for ALL responses to bypass Render's Nginx buffering
-      res.setHeader('X-Accel-Buffering', 'no');
-      next();
-    });
-
-    // Skip JSON parsing for SSE endpoints
     app.use((req, res, next) => {
       if (req.path === "/messages") {
-        next();
+        next(); // skip JSON parsing
       } else {
         express.json()(req, res, next);
       }
     });
 
-    // Root endpoint for Render health checks
-    app.get("/", (req, res) => {
-      res.json({ 
-        status: "ok", 
-        server: SERVER_NAME,
-        message: "MCP Server is running"
-      });
-    });
-
-    // Health check endpoint
-    app.get("/health", (req, res) => {
-      res.json({ 
-        status: "ok", 
-        server: SERVER_NAME, 
-        activeSessions: Object.keys(transports).length,
-        availableSessions: Object.keys(transports)
-      });
-    });
-
-    // Debug SSE endpoint (no auth required)
-    app.get("/sse-test", (req, res) => {
-      console.log("SSE test endpoint hit");
-      
-      // Let the response object set its own headers, just ensure our bypass header is set
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-      
-      res.write('data: {"test": "connection working"}\n\n');
-      
-      let counter = 0;
-      const interval = setInterval(() => {
-        counter++;
-        res.write(`data: {"message": "test ${counter}", "time": "${new Date().toISOString()}"}\n\n`);
-        
-        if (counter >= 10) {
-          clearInterval(interval);
-          res.end();
-        }
-      }, 1000);
-      
-      req.on('close', () => {
-        clearInterval(interval);
-      });
-    });
-
-    // Main SSE endpoint
+    // FIXED: SSE endpoint with token validation
     app.get("/sse", async (req, res) => {
-      console.log(`SSE request from origin: ${req.headers.origin}`);
       
       try {
-        // Validate token
+        // Validate token from query parameter
         const token = req.query.token;
         const tokenData = validateToken(token);
-        console.log(`Token validated for server: ${tokenData.serverId}`);
         
+        // Set CORS headers explicitly for SSE
+        res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+        
+        // Disable proxy buffering so the SDK's headers go out immediately
+        res.setHeader("X-Accel-Buffering", "no");
+
         // Create MCP server instance
         const server = new Server(
           { name: SERVER_NAME, version: "0.1.0" },
@@ -214,58 +183,53 @@ async function run() {
         );
         
         server.onerror = (err) => {
-          console.error("[MCP Server Error]", err);
         };
 
         await setupServerHandlers(server, tools);
 
-        // Create transport and let MCP SDK handle headers
+        // Create SSE transport
         const transport = new SSEServerTransport("/messages", res);
         transports[transport.sessionId] = transport;
         servers[transport.sessionId] = server;
 
-        console.log(`SSE connection established. Session ID: ${transport.sessionId}`);
-
-        // Handle disconnection
+        // Handle client disconnect
         res.on("close", async () => {
-          console.log(`SSE connection closed. Session ID: ${transport.sessionId}`);
           delete transports[transport.sessionId];
           await server.close();
           delete servers[transport.sessionId];
-        });
-
-        res.on("error", (err) => {
-          console.error("SSE connection error:", err);
         });
 
         // Connect server to transport
         await server.connect(transport);
         
       } catch (error) {
-        console.error("SSE setup error:", error);
-        
-        if (!res.headersSent) {
-          res.status(400).json({ 
-            error: error.message,
-            details: "Token validation or server setup failed"
-          });
-        }
+        res.status(400).json({ 
+          error: error.message,
+          details: "Token validation or server setup failed"
+        });
       }
     });
 
-    // Messages endpoint for JSON-RPC calls
+    // Handle preflight OPTIONS requests
+    app.options("/sse", (req, res) => {
+      res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cache-Control, X-Requested-With');
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.status(200).end();
+    });
+
+    // FIXED: Companion POST endpoint for JSON-RPC calls
     app.post("/messages", async (req, res) => {
       try {
         const sessionId = req.query.sessionId;
         const transport = transports[sessionId];
         const server = servers[sessionId];
 
-        console.log(`POST /messages for session: ${sessionId}`);
 
         if (transport && server) {
           await transport.handlePostMessage(req, res);
         } else {
-          console.error(`No transport/server found for sessionId: ${sessionId}`);
           res.status(400).json({ 
             error: "No transport/server found for sessionId",
             sessionId: sessionId,
@@ -273,29 +237,24 @@ async function run() {
           });
         }
       } catch (error) {
-        console.error("POST /messages error:", error);
         res.status(500).json({ error: error.message });
       }
     });
 
-    // Error handling middleware
-    app.use((err, req, res, next) => {
-      console.error('Express error:', err);
-      if (!res.headersSent) {
-        res.status(500).json({ error: 'Internal server error' });
-      }
+    // Add a health check endpoint
+    app.get("/health", (req, res) => {
+      res.json({ 
+        status: "ok", 
+        server: SERVER_NAME, 
+        activeSessions: Object.keys(transports).length
+      });
     });
 
     const port = process.env.PORT || 3001;
     app.listen(port, () => {
-      console.log(`MCP Server running on port ${port}`);
-      console.log(`Health check: http://localhost:${port}/health`);
-      console.log(`SSE test: http://localhost:${port}/sse-test`);
-      console.log(`SSE endpoint: http://localhost:${port}/sse?token=<your-token>`);
     });
-    
   } else {
-    // stdio mode
+    // stdio mode: single session over stdin/stdout
     const server = new Server(
       { name: SERVER_NAME, version: "0.1.0" },
       { capabilities: { tools: {} } }
@@ -316,6 +275,5 @@ async function run() {
 }
 
 run().catch((err) => {
-  console.error("Server startup error:", err);
   process.exit(1);
 });
