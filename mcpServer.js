@@ -152,7 +152,22 @@ async function run() {
       })
     );
 
-    // Conditional JSON parsing middleware
+    // Middleware to inject Render/Nginx bypass headers for SSE
+    app.use("/sse", (req, res, next) => {
+      // Set CORS headers
+      const origin = req.headers.origin;
+      if (origin && allowedOrigins.includes(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+      }
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      
+      // Critical header to bypass Render's Nginx buffering
+      res.setHeader('X-Accel-Buffering', 'no');
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      
+      next();
+    });
     app.use((req, res, next) => {
       if (req.path === "/messages") {
         next(); // skip JSON parsing for SSE message handling
@@ -175,7 +190,7 @@ async function run() {
       }
     });
 
-    // FIXED: SSE endpoint with proper headers
+    // SIMPLIFIED: SSE endpoint - let MCP SDK handle everything
     app.get("/sse", async (req, res) => {
       console.log(`SSE request from origin: ${req.headers.origin}`);
       
@@ -185,39 +200,6 @@ async function run() {
         const tokenData = validateToken(token);
         console.log(`Token validated for server: ${tokenData.serverId}`);
         
-        // RENDER-SPECIFIC: Set headers to bypass Nginx buffering
-        const origin = req.headers.origin;
-        if (origin && allowedOrigins.includes(origin)) {
-          res.setHeader('Access-Control-Allow-Origin', origin);
-        }
-        res.setHeader('Access-Control-Allow-Credentials', 'true');
-        
-        // Critical SSE headers for Render's Nginx
-        res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
-        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-        res.setHeader('Pragma', 'no-cache');
-        res.setHeader('Expires', '0');
-        res.setHeader('Connection', 'keep-alive');
-        res.setHeader('X-Accel-Buffering', 'no'); // Critical for Render's Nginx
-        
-        // Additional headers that can help with proxy issues
-        res.setHeader('Transfer-Encoding', 'chunked');
-        
-        // Immediately flush headers
-        res.flushHeaders();
-        
-        // Send initial connection event
-        res.write('data: {"type":"connection","status":"connected"}\n\n');
-        
-        // Send keepalive pings every 30 seconds to prevent Render timeout
-        const keepAliveInterval = setInterval(() => {
-          if (!res.destroyed) {
-            res.write('data: {"type":"ping","timestamp":' + Date.now() + '}\n\n');
-          } else {
-            clearInterval(keepAliveInterval);
-          }
-        }, 30000);
-
         // Create MCP server instance
         const server = new Server(
           { name: SERVER_NAME, version: "0.1.0" },
@@ -230,7 +212,7 @@ async function run() {
 
         await setupServerHandlers(server, tools);
 
-        // Create SSE transport
+        // Create SSE transport and let it handle headers
         const transport = new SSEServerTransport("/messages", res);
         transports[transport.sessionId] = transport;
         servers[transport.sessionId] = server;
@@ -240,7 +222,6 @@ async function run() {
         // Handle client disconnect
         res.on("close", async () => {
           console.log(`SSE connection closed. Session ID: ${transport.sessionId}`);
-          clearInterval(keepAliveInterval);
           delete transports[transport.sessionId];
           await server.close();
           delete servers[transport.sessionId];
@@ -257,15 +238,8 @@ async function run() {
       } catch (error) {
         console.error("SSE setup error:", error);
         
-        // FIXED: Return proper error response with correct headers
+        // Return proper error response
         if (!res.headersSent) {
-          const origin = req.headers.origin;
-          if (origin && allowedOrigins.includes(origin)) {
-            res.setHeader('Access-Control-Allow-Origin', origin);
-          }
-          res.setHeader('Access-Control-Allow-Credentials', 'true');
-          res.setHeader('Content-Type', 'application/json');
-          
           res.status(400).json({ 
             error: error.message,
             details: "Token validation or server setup failed"
