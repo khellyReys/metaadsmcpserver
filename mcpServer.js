@@ -105,18 +105,19 @@ async function setupServerHandlers(server, tools) {
 
 // Helper function to set SSE headers - UPDATED
 function setSSEHeaders(res, origin) {
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache, no-transform"); // Added no-transform
+  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
   res.setHeader("Connection", "keep-alive");
   res.setHeader("Access-Control-Allow-Origin", origin || "*");
   res.setHeader("Access-Control-Allow-Credentials", "true");
-  res.setHeader("X-Accel-Buffering", "no"); // disable proxy buffering
+  res.setHeader("X-Accel-Buffering", "no");
 }
 
 // Helper function to send SSE error and close connection
 function sendSSEError(res, error, origin) {
   if (!res.headersSent) {
     setSSEHeaders(res, origin);
+
   }
   
   res.write(`event: error\n`);
@@ -251,6 +252,16 @@ async function run() {
         // Set SSE headers immediately after validation
         setSSEHeaders(res, origin);
 
+        // Flush headers so proxies/CDNs recognize streaming
+        if (typeof res.flushHeaders === "function") {
+          res.flushHeaders();
+        }
+
+        // Send a comment every 15s so proxies don't close idle connections
+        const keepAliveTimer = setInterval(() => {
+          try { res.write(`: keep-alive ${Date.now()}\n\n`); } catch {}
+        }, 15000);
+
         // Create MCP server instance
         const server = new Server(
           { name: SERVER_NAME, version: "0.1.0" },
@@ -277,6 +288,7 @@ async function run() {
         // Handle connection close
         res.on("close", async () => {
           console.log("[SSE] Connection closed for session:", transport.sessionId);
+          clearInterval(keepAliveTimer);
           delete transports[transport.sessionId];
           try {
             await server.close();
@@ -285,6 +297,7 @@ async function run() {
           }
           delete servers[transport.sessionId];
         });
+        
 
         // Handle client disconnect
         res.on("error", (error) => {
