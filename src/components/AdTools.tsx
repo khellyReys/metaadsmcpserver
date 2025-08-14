@@ -26,7 +26,9 @@ interface AdToolsProps {
   serverAccessToken: string;
 }
 
-const MCP_BASE_URL = import.meta.env.VITE_MCP_URL || "https://metaadsmcpserver.onrender.com";
+const MCP_BASE_URL = "https://metaadsmcpserver.onrender.com";
+console.log("MCP_BASE_URL:", MCP_BASE_URL); // Add this line
+console.log("VITE_MCP_URL env var:", import.meta.env.VITE_MCP_URL); // Add this too
 
 const AdTools: React.FC<AdToolsProps> = ({ accountId, secret, serverId, serverAccessToken  }) => {
   // State hooks...
