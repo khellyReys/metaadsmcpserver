@@ -103,10 +103,10 @@ async function setupServerHandlers(server, tools) {
   });
 }
 
-// Helper function to set SSE headers
+// Helper function to set SSE headers - UPDATED
 function setSSEHeaders(res, origin) {
   res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Cache-Control", "no-cache, no-transform"); // Added no-transform
   res.setHeader("Connection", "keep-alive");
   res.setHeader("Access-Control-Allow-Origin", origin || "*");
   res.setHeader("Access-Control-Allow-Credentials", "true");
@@ -194,7 +194,14 @@ async function run() {
       return express.json()(req, res, next);
     });
 
-    // Health
+    // DEBUG: Log all requests to see what's being hit
+    app.use((req, res, next) => {
+      console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`, 
+        req.query, req.headers.origin || 'no-origin');
+      next();
+    });
+
+    // Health endpoint - MUST be before static files
     app.get("/health", (req, res) => {
       res.json({
         status: "ok",
@@ -205,7 +212,7 @@ async function run() {
       });
     });
 
-    // Preflight
+    // Preflight for SSE - MUST be before static files
     app.options("/sse", (req, res) => {
       res.setHeader("Access-Control-Allow-Origin", req.headers.origin || "*");
       res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -217,7 +224,14 @@ async function run() {
       res.status(200).end();
     });
 
-    // SSE handshake (creates a session) - FIXED VERSION
+    // SSE route debugging middleware
+    app.use('/sse', (req, res, next) => {
+      console.log('[DEBUG] SSE route hit with method:', req.method, 'and path:', req.path);
+      console.log('[DEBUG] Headers:', req.headers);
+      next();
+    });
+
+    // SSE handshake (creates a session) - MUST be before static files
     app.get("/sse", async (req, res) => {
       const origin = req.headers.origin;
       
@@ -291,7 +305,7 @@ async function run() {
       }
     });
 
-    // JSON-RPC companion endpoint
+    // JSON-RPC companion endpoint - MUST be before static files
     app.post("/messages", async (req, res) => {
       try {
         const sessionId = req.query.sessionId;
@@ -315,7 +329,42 @@ async function run() {
       }
     });
 
-    // Catch-all error handler for Express
+    // ===== STATIC FILE SERVING - MUST BE AFTER API ROUTES =====
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = path.dirname(__filename);
+    
+    // Serve static files from dist folder (if it exists)
+    const distPath = path.join(__dirname, 'dist');
+    console.log('[STATIC] Serving static files from:', distPath);
+    
+    app.use(express.static(distPath, {
+      // Don't serve index.html automatically for routes
+      index: false,
+      // Cache control for static assets
+      setHeaders: (res, filePath) => {
+        // Don't cache HTML files to ensure fresh content
+        if (path.extname(filePath) === '.html') {
+          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        } else {
+          // Cache other assets for 1 day
+          res.setHeader('Cache-Control', 'public, max-age=86400');
+        }
+      }
+    }));
+
+    // Catch-all handler for SPA (MUST be absolute last route)
+    app.get('*', (req, res) => {
+      console.log('[CATCH-ALL] Serving index.html for:', req.path);
+      const indexPath = path.join(__dirname, 'dist', 'index.html');
+      res.sendFile(indexPath, (err) => {
+        if (err) {
+          console.error('[CATCH-ALL] Error serving index.html:', err);
+          res.status(404).send('Page not found');
+        }
+      });
+    });
+
+    // Express error handler - should rarely be hit now
     app.use((error, req, res, next) => {
       console.error("[Express error handler]", error);
       if (res.headersSent) {
@@ -332,6 +381,7 @@ async function run() {
       console.log(`MCP SSE server listening on http://localhost:${port}`);
       console.log(`Health: http://localhost:${port}/health`);
       console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+      console.log(`Static files: ${distPath}`);
       // Clear keepalive once we're listening (server keeps event loop alive)
       clearInterval(keepalive);
     });
