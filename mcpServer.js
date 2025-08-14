@@ -352,7 +352,7 @@ async function run() {
       }
     }));
 
-    // Serve the main index.html at root (but not as catch-all yet)
+    // Serve the main index.html at root and common SPA routes
     app.get('/', (req, res) => {
       console.log('[ROOT] Serving index.html');
       const indexPath = path.join(__dirname, 'dist', 'index.html');
@@ -373,19 +373,13 @@ async function run() {
       });
     });
 
-    // Catch-all for SPA routes (MUST be absolute last)
-    app.get('*', (req, res) => {
-      console.log('[CATCH-ALL] Serving index.html for:', req.path);
-      
-      // Don't serve index.html for API routes that somehow got here
-      if (req.path.startsWith('/api/')) {
-        return res.status(404).json({ error: 'API endpoint not found' });
-      }
-      
+    // Handle specific common SPA routes if needed
+    app.get('/workspace', (req, res) => {
+      console.log('[WORKSPACE] Serving index.html for workspace route');
       const indexPath = path.join(__dirname, 'dist', 'index.html');
       res.sendFile(indexPath, (err) => {
         if (err) {
-          console.error('[CATCH-ALL] Error serving index.html:', err);
+          console.error('[WORKSPACE] Error serving index.html:', err);
           res.status(404).send('Page not found');
         }
       });
