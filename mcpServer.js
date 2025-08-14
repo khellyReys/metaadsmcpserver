@@ -173,6 +173,7 @@ async function run() {
       "http://localhost:5173",
       "https://localhost:5173",
       "https://metaadsmcpserver-1.onrender.com",
+      "https://metaadsmcpserver.onrender.com",
     ];
 
     app.use(
