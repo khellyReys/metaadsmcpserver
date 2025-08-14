@@ -366,7 +366,7 @@ async function run() {
     }));
 
     // Catch-all handler for SPA (MUST be absolute last route)
-    app.get('*', (req, res) => {
+    app.get('(.*)', (req, res) => {
       console.log('[CATCH-ALL] Serving index.html for:', req.path);
       const indexPath = path.join(__dirname, 'dist', 'index.html');
       res.sendFile(indexPath, (err) => {
@@ -376,6 +376,8 @@ async function run() {
         }
       });
     });
+    
+    
 
     // Express error handler - should rarely be hit now
     app.use((error, req, res, next) => {
