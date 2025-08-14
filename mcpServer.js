@@ -103,21 +103,22 @@ async function setupServerHandlers(server, tools) {
   });
 }
 
-// Helper function to set SSE headers - UPDATED
+// Helper function to set SSE headers
 function setSSEHeaders(res, origin) {
-  res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
-  res.setHeader("Cache-Control", "no-cache, no-transform");
-  res.setHeader("Connection", "keep-alive");
-  res.setHeader("Access-Control-Allow-Origin", origin || "*");
-  res.setHeader("Access-Control-Allow-Credentials", "true");
-  res.setHeader("X-Accel-Buffering", "no");
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': origin || '*',
+    'Access-Control-Allow-Credentials': 'true',
+    'X-Accel-Buffering': 'no'
+  });
 }
 
 // Helper function to send SSE error and close connection
 function sendSSEError(res, error, origin) {
   if (!res.headersSent) {
     setSSEHeaders(res, origin);
-
   }
   
   res.write(`event: error\n`);
@@ -189,32 +190,31 @@ async function run() {
       })
     );
 
-    // Only parse JSON for non-/messages routes (SDK uses raw body)
+    // CRITICAL: Global request logger to see what routes are being hit
     app.use((req, res, next) => {
-      if (req.path === "/messages") return next();
-      return express.json()(req, res, next);
-    });
-
-    // DEBUG: Log all requests to see what's being hit
-    app.use((req, res, next) => {
-      console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`, 
-        req.query, req.headers.origin || 'no-origin');
+      console.log(`[${new Date().toISOString()}] ${req.method} ${req.path} from ${req.headers.origin || 'no-origin'}`);
+      console.log(`[HEADERS]`, req.headers);
       next();
     });
 
-    // Health endpoint - MUST be before static files
+    // ===== API ROUTES FIRST - THESE MUST COME BEFORE ANY STATIC SERVING =====
+    
+    // Health endpoint
     app.get("/health", (req, res) => {
+      console.log('[HEALTH] Route hit');
       res.json({
         status: "ok",
         server: SERVER_NAME,
         activeSessions: Object.keys(transports).length,
         node: process.version,
         mode: "SSE",
+        timestamp: new Date().toISOString()
       });
     });
 
-    // Preflight for SSE - MUST be before static files
-    app.options("/sse", (req, res) => {
+    // Preflight for SSE
+    app.options("/api/sse", (req, res) => {
+      console.log('[PREFLIGHT] /api/sse route hit');
       res.setHeader("Access-Control-Allow-Origin", req.headers.origin || "*");
       res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
       res.setHeader(
@@ -225,15 +225,9 @@ async function run() {
       res.status(200).end();
     });
 
-    // SSE route debugging middleware
-    app.use('/sse', (req, res, next) => {
-      console.log('[DEBUG] SSE route hit with method:', req.method, 'and path:', req.path);
-      console.log('[DEBUG] Headers:', req.headers);
-      next();
-    });
-
-    // SSE handshake (creates a session) - MUST be before static files
-    app.get("/sse", async (req, res) => {
+    // CHANGE: Use /api/sse instead of /sse to avoid conflicts
+    app.get("/api/sse", async (req, res) => {
+      console.log('[SSE] /api/sse route hit');
       const origin = req.headers.origin;
       
       try {
@@ -249,18 +243,8 @@ async function run() {
         const tokenData = validateToken(token);
         console.log("[SSE] Token validated for serverId:", tokenData.serverId);
 
-        // Set SSE headers immediately after validation
+        // Set SSE headers using writeHead to ensure they're set correctly
         setSSEHeaders(res, origin);
-
-        // Flush headers so proxies/CDNs recognize streaming
-        if (typeof res.flushHeaders === "function") {
-          res.flushHeaders();
-        }
-
-        // Send a comment every 15s so proxies don't close idle connections
-        const keepAliveTimer = setInterval(() => {
-          try { res.write(`: keep-alive ${Date.now()}\n\n`); } catch {}
-        }, 15000);
 
         // Create MCP server instance
         const server = new Server(
@@ -278,8 +262,8 @@ async function run() {
         // Setup request handlers
         await setupServerHandlers(server, tools);
 
-        // Create SSE transport
-        const transport = new SSEServerTransport("/messages", res);
+        // Create SSE transport - CHANGE: Use /api/messages
+        const transport = new SSEServerTransport("/api/messages", res);
         transports[transport.sessionId] = transport;
         servers[transport.sessionId] = server;
 
@@ -288,7 +272,6 @@ async function run() {
         // Handle connection close
         res.on("close", async () => {
           console.log("[SSE] Connection closed for session:", transport.sessionId);
-          clearInterval(keepAliveTimer);
           delete transports[transport.sessionId];
           try {
             await server.close();
@@ -297,7 +280,6 @@ async function run() {
           }
           delete servers[transport.sessionId];
         });
-        
 
         // Handle client disconnect
         res.on("error", (error) => {
@@ -311,15 +293,22 @@ async function run() {
         console.log("[SSE] Server connected successfully for session:", transport.sessionId);
 
       } catch (error) {
-        console.error("[/sse error]", error && error.stack ? error.stack : error);
+        console.error("[/api/sse error]", error && error.stack ? error.stack : error);
         
         // Send error as SSE event instead of JSON response
         sendSSEError(res, error, origin);
       }
     });
 
-    // JSON-RPC companion endpoint - MUST be before static files
-    app.post("/messages", async (req, res) => {
+    // Only parse JSON for non-/api/messages routes (SDK uses raw body)
+    app.use((req, res, next) => {
+      if (req.path === "/api/messages") return next();
+      return express.json()(req, res, next);
+    });
+
+    // JSON-RPC companion endpoint - CHANGE: Use /api/messages
+    app.post("/api/messages", async (req, res) => {
+      console.log('[MESSAGES] /api/messages route hit');
       try {
         const sessionId = req.query.sessionId;
         const transport = transports[sessionId];
@@ -328,8 +317,8 @@ async function run() {
         if (transport && server) {
           await transport.handlePostMessage(req, res);
         } else {
-          console.error("[/messages] No transport/server found for sessionId:", sessionId);
-          console.error("[/messages] Available sessions:", Object.keys(transports));
+          console.error("[/api/messages] No transport/server found for sessionId:", sessionId);
+          console.error("[/api/messages] Available sessions:", Object.keys(transports));
           res.status(400).json({
             error: "No transport/server found for sessionId",
             sessionId: sessionId,
@@ -337,7 +326,7 @@ async function run() {
           });
         }
       } catch (error) {
-        console.error("[/messages error]", error && error.stack ? error.stack : error);
+        console.error("[/api/messages error]", error && error.stack ? error.stack : error);
         res.status(500).json({ error: error.message || String(error) });
       }
     });
@@ -346,28 +335,53 @@ async function run() {
     const __filename = fileURLToPath(import.meta.url);
     const __dirname = path.dirname(__filename);
     
-    // Serve static files from dist folder (if it exists)
+    // Check if dist folder exists
     const distPath = path.join(__dirname, 'dist');
-    console.log('[STATIC] Serving static files from:', distPath);
+    console.log('[STATIC] Checking for dist folder at:', distPath);
     
-    app.use(express.static(distPath, {
-      // Don't serve index.html automatically for routes
+    // Serve static files from dist folder with explicit path prefix
+    app.use('/static', express.static(distPath, {
       index: false,
-      // Cache control for static assets
       setHeaders: (res, filePath) => {
-        // Don't cache HTML files to ensure fresh content
+        console.log('[STATIC] Serving file:', filePath);
         if (path.extname(filePath) === '.html') {
           res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
         } else {
-          // Cache other assets for 1 day
           res.setHeader('Cache-Control', 'public, max-age=86400');
         }
       }
     }));
 
-    // Catch-all handler for SPA (MUST be absolute last route)
-    app.get('(.*)', (req, res) => {
+    // Serve the main index.html at root (but not as catch-all yet)
+    app.get('/', (req, res) => {
+      console.log('[ROOT] Serving index.html');
+      const indexPath = path.join(__dirname, 'dist', 'index.html');
+      res.sendFile(indexPath, (err) => {
+        if (err) {
+          console.error('[ROOT] Error serving index.html:', err);
+          res.status(200).send(`
+            <h1>MCP Server Running</h1>
+            <p>Server is running in SSE mode</p>
+            <p>API endpoints:</p>
+            <ul>
+              <li><a href="/health">/health</a> - Health check</li>
+              <li>/api/sse - SSE endpoint</li>
+              <li>/api/messages - Messages endpoint</li>
+            </ul>
+          `);
+        }
+      });
+    });
+
+    // Catch-all for SPA routes (MUST be absolute last)
+    app.get('*', (req, res) => {
       console.log('[CATCH-ALL] Serving index.html for:', req.path);
+      
+      // Don't serve index.html for API routes that somehow got here
+      if (req.path.startsWith('/api/')) {
+        return res.status(404).json({ error: 'API endpoint not found' });
+      }
+      
       const indexPath = path.join(__dirname, 'dist', 'index.html');
       res.sendFile(indexPath, (err) => {
         if (err) {
@@ -376,10 +390,8 @@ async function run() {
         }
       });
     });
-    
-    
 
-    // Express error handler - should rarely be hit now
+    // Express error handler
     app.use((error, req, res, next) => {
       console.error("[Express error handler]", error);
       if (res.headersSent) {
@@ -395,6 +407,7 @@ async function run() {
     app.listen(port, () => {
       console.log(`MCP SSE server listening on http://localhost:${port}`);
       console.log(`Health: http://localhost:${port}/health`);
+      console.log(`SSE: http://localhost:${port}/api/sse`);
       console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
       console.log(`Static files: ${distPath}`);
       // Clear keepalive once we're listening (server keeps event loop alive)

@@ -123,7 +123,7 @@ const AdTools: React.FC<AdToolsProps> = ({ accountId, secret, serverId, serverAc
   const sseUrl = useMemo(() => {
     const tokenString = `${serverId}:${serverAccessToken}`;
     const encodedToken = btoa(tokenString);
-    return `${MCP_BASE_URL}/sse?token=${encodeURIComponent(encodedToken)}`;
+    return `${MCP_BASE_URL}/api/sse?token=${encodeURIComponent(encodedToken)}`;
   }, [serverId, serverAccessToken]);
   
   useEffect(() => {
