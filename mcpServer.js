@@ -105,28 +105,31 @@ async function setupServerHandlers(server, tools) {
 
 // Helper function to set SSE headers
 function setSSEHeaders(res, origin) {
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache, no-transform',
-    'Connection': 'keep-alive',
-    'Access-Control-Allow-Origin': origin || '*',
-    'Access-Control-Allow-Credentials': 'true',
-    'X-Accel-Buffering': 'no'
-  });
+  if (!res.headersSent) {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('Access-Control-Allow-Origin', origin || '*');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('X-Accel-Buffering', 'no');
+  }
 }
 
 // Helper function to send SSE error and close connection
 function sendSSEError(res, error, origin) {
-  if (!res.headersSent) {
-    setSSEHeaders(res, origin);
+  if (!res.headersSent && !res.destroyed) {
+    try {
+      setSSEHeaders(res, origin);
+      res.write(`event: error\n`);
+      res.write(`data: ${JSON.stringify({ 
+        error: error.message || String(error),
+        timestamp: new Date().toISOString()
+      })}\n\n`);
+      res.end();
+    } catch (writeErr) {
+      console.error("[Error in sendSSEError]", writeErr);
+    }
   }
-  
-  res.write(`event: error\n`);
-  res.write(`data: ${JSON.stringify({ 
-    error: error.message || String(error),
-    timestamp: new Date().toISOString()
-  })}\n\n`);
-  res.end();
 }
 
 async function run() {
@@ -243,7 +246,7 @@ async function run() {
         const tokenData = validateToken(token);
         console.log("[SSE] Token validated for serverId:", tokenData.serverId);
 
-        // Set SSE headers using writeHead to ensure they're set correctly
+        // Set SSE headers BEFORE creating transport
         setSSEHeaders(res, origin);
 
         // Create MCP server instance
@@ -254,8 +257,17 @@ async function run() {
         
         server.onerror = (err) => {
           console.error("[MCP server error]", err);
-          if (!res.headersSent) {
-            sendSSEError(res, err, origin);
+          if (!res.headersSent && !res.destroyed) {
+            try {
+              res.write(`event: error\n`);
+              res.write(`data: ${JSON.stringify({ 
+                error: err.message || String(err),
+                timestamp: new Date().toISOString()
+              })}\n\n`);
+              res.end();
+            } catch (writeErr) {
+              console.error("[Error writing error response]", writeErr);
+            }
           }
         };
 
@@ -296,7 +308,19 @@ async function run() {
         console.error("[/api/sse error]", error && error.stack ? error.stack : error);
         
         // Send error as SSE event instead of JSON response
-        sendSSEError(res, error, origin);
+        if (!res.headersSent && !res.destroyed) {
+          try {
+            setSSEHeaders(res, origin);
+            res.write(`event: error\n`);
+            res.write(`data: ${JSON.stringify({ 
+              error: error.message || String(error),
+              timestamp: new Date().toISOString()
+            })}\n\n`);
+            res.end();
+          } catch (writeErr) {
+            console.error("[Error writing error response]", writeErr);
+          }
+        }
       }
     });
 
