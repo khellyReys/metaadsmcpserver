@@ -20,17 +20,17 @@ interface McpTool {
 }
 
 interface AdToolsProps {
-  accountId: string;
+  businessId: string;
+  adAccountId: string;  // This is facebook_ad_accounts.id
+  pageId: string;       // This is facebook_pages.id
   secret: string;
   serverId: string;
   serverAccessToken: string;
 }
 
-const MCP_BASE_URL = "https://metaadsmcpserver.onrender.com";
-console.log("MCP_BASE_URL:", MCP_BASE_URL); // Add this line
-console.log("VITE_MCP_URL env var:", import.meta.env.VITE_MCP_URL); // Add this too
+const MCP_BASE_URL = import.meta.env.VITE_MCP_URL || "https://metaadsmcpserver.onrender.com";
 
-const AdTools: React.FC<AdToolsProps> = ({ accountId, secret, serverId, serverAccessToken  }) => {
+const AdTools: React.FC<AdToolsProps> = ({ businessId, adAccountId, pageId, secret, serverId, serverAccessToken  }) => {
   // State hooks...
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All");
@@ -103,7 +103,6 @@ const AdTools: React.FC<AdToolsProps> = ({ accountId, secret, serverId, serverAc
           } catch {}
         }
       } catch (error) {
-        console.error('Error loading tools:', error);
       } finally {
         setTools(loaded);
         setLoadingTools(false);
@@ -121,7 +120,7 @@ const AdTools: React.FC<AdToolsProps> = ({ accountId, secret, serverId, serverAc
     return matchesSearch && matchesCat;
   }), [tools, searchTerm, selectedCategory]);
 
-  // SSE URL & handshake - FIXED: using accountId instead of businessId
+  // SSE URL & handshake - using accountId for connection
   const sseUrl = useMemo(() => {
     const tokenString = `${serverId}:${serverAccessToken}`;
     const encodedToken = btoa(tokenString);
@@ -311,13 +310,109 @@ const AdTools: React.FC<AdToolsProps> = ({ accountId, secret, serverId, serverAc
   const openToolDialog = (tool: McpTool) => {
     setSelectedTool(tool);
     const initialValues: Record<string,string> = {};
-    tool.parameters?.properties && Object.keys(tool.parameters.properties).forEach(key => {
-      initialValues[key] = key === 'account_id' ? accountId : '';
-    });
-    setParameterValues(initialValues);
+    
+    // Dynamically extract default values from the tool's function signature
+    const getDefaultValue = async (paramName: string, paramDef: any) => {
+      try {
+        // Try to get the actual tool module to extract defaults from function signature
+        const toolId = tool.id; // format: "toolName:path"
+        const toolPath = toolId.split(':')[1];
+        
+        if (toolPath) {
+          try {
+            const mod = await import(`../../tools/${toolPath}`);
+            const funcStr = mod.apiTool?.function?.toString() || '';
+            
+            // Parse function parameters to extract default values
+            const paramMatch = funcStr.match(new RegExp(`${paramName}\\s*=\\s*([^,}]+)`));
+            if (paramMatch) {
+              let defaultValue = paramMatch[1].trim();
+              
+              // Clean up the default value and convert to proper JSON format
+              if (defaultValue.startsWith("'") || defaultValue.startsWith('"')) {
+                // String literal
+                return defaultValue.slice(1, -1);
+              } else if (defaultValue === 'true' || defaultValue === 'false') {
+                // Boolean literal
+                return defaultValue;
+              } else if (defaultValue.startsWith('[')) {
+                // Array literal - convert single quotes to double quotes for valid JSON
+                try {
+                  // Replace single quotes with double quotes for JSON compatibility
+                  const jsonString = defaultValue.replace(/'/g, '"');
+                  // Validate it's valid JSON
+                  JSON.parse(jsonString);
+                  return jsonString;
+                } catch {
+                  // If conversion fails, return empty array
+                  return '[]';
+                }
+              } else if (!isNaN(Number(defaultValue))) {
+                // Number literal
+                return defaultValue;
+              } else if (defaultValue === 'null') {
+                return '';
+              } else {
+                return defaultValue;
+              }
+            }
+          } catch (importError) {
+          }
+        }
+      } catch (error) {
+      }
+      
+      // Fallback strategies with enhanced defaults
+      // 1. Use first enum option if available
+      if (paramDef.enum && paramDef.enum.length > 0) {
+        return paramDef.enum[0];
+      }
+      
+      // 2. Enhanced special handling for common parameter names
+      if (paramName === 'account_id') {
+        return adAccountId;  // Use facebook_ad_accounts.id
+      } else if (paramName === 'business_id') {
+        return businessId;
+      } else if (paramName === 'page_id') {
+        return pageId;       // Use facebook_pages.id
+      }
+      
+      // 3. Type-based defaults
+      if (paramDef.type === 'boolean') {
+        return 'false';
+      } else if (paramDef.type === 'number' || paramDef.type === 'integer') {
+        return '';
+      } else if (paramDef.type === 'array') {
+        // For array types with enum, use first enum value in array format
+        if (paramDef.items?.enum && paramDef.items.enum.length > 0) {
+          return JSON.stringify([paramDef.items.enum[0]]);
+        }
+        return '[]';
+      }
+      
+      return '';
+    };
+  
+    // Set initial values for all parameters
+    if (tool.parameters?.properties) {
+      Promise.all(
+        Object.entries(tool.parameters.properties).map(async ([key, def]) => {
+          const defaultVal = await getDefaultValue(key, def);
+          return [key, defaultVal];
+        })
+      ).then(results => {
+        const values: Record<string, string> = {};
+        results.forEach(([key, value]) => {
+          values[key as string] = value as string;
+        });
+        setParameterValues(values);
+      });
+    }
+    
     setToolResponse(null);
     setExecutionError(null);
   };
+  
   const closeToolDialog = () => { setSelectedTool(null); setParameterValues({}); setToolResponse(null); setExecutionError(null); };
   const handleParameterChange = (k:string, v:string) => setParameterValues(p => ({ ...p, [k]: v }));
   const executeToolWithParams = () => {
@@ -429,11 +524,32 @@ const getReadableOutput = (resp: any) => {
               </div>
             </div>
 
+            {/* Account Info Cards - Mobile Optimized */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
+              <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 rounded-xl min-w-0">
+                <div className="w-2 h-2 bg-blue-600 rounded-full flex-shrink-0"></div>
+                <span className="text-gray-700 whitespace-nowrap">Business ID:</span>
+                <span className="text-blue-900 font-mono text-xs truncate">{businessId}</span>
+              </div>
+              
+              <div className="flex items-center gap-2 px-3 py-2 bg-green-50 rounded-xl min-w-0">
+                <div className="w-2 h-2 bg-green-600 rounded-full flex-shrink-0"></div>
+                <span className="text-gray-700 whitespace-nowrap">Ad Account:</span>
+                <span className="text-green-900 font-mono text-xs truncate">{adAccountId}</span>
+              </div>
+              
+              <div className="flex items-center gap-2 px-3 py-2 bg-purple-50 rounded-xl min-w-0">
+                <div className="w-2 h-2 bg-purple-600 rounded-full flex-shrink-0"></div>
+                <span className="text-gray-700 whitespace-nowrap">Page ID:</span>
+                <span className="text-purple-900 font-mono text-xs truncate">{pageId}</span>
+              </div>
+            </div>
+
             {/* Connection Info - Mobile Optimized */}
             <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-6 text-sm">
               {/* Server Link - Collapsible on mobile */}
-              <div className="flex items-center gap-2 px-3 py-2 bg-blue-50 rounded-xl min-w-0">
-                <div className="w-2 h-2 bg-blue-600 rounded-full flex-shrink-0"></div>
+              <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 rounded-xl min-w-0">
+                <div className="w-2 h-2 bg-gray-600 rounded-full flex-shrink-0"></div>
                 <span className="text-gray-700 whitespace-nowrap">MCP Server:</span>
                 <div className="min-w-0 flex-1 max-w-xs sm:max-w-md">
                   <div className="flex items-center border-2 border-gray-200 rounded-lg overflow-hidden shadow-sm bg-white hover:border-gray-300 transition-colors">
@@ -516,45 +632,111 @@ const getReadableOutput = (resp: any) => {
                       <span className="font-medium">Configure the parameters below to execute this tool</span>
                     </div>
                     <div className="space-y-4 sm:space-y-6">
-                      {Object.entries(selectedTool.parameters.properties).map(([k,def]) => {
-                        const required = selectedTool.parameters?.required?.includes(k);
-                        return (
-                          <div key={k}>
-                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
-                              <label className="font-semibold text-gray-900 text-sm">
-                                {k} {required && <span className="text-red-500 ml-1">*</span>}
-                              </label>
-                              <span className="text-xs bg-gray-100 px-3 py-1 rounded-full text-gray-700 font-medium w-fit">
-                                {def.type}
-                              </span>
-                            </div>
-                            {def.description && (
-                              <p className="text-sm text-gray-600 mb-3 bg-gray-50 px-3 sm:px-4 py-2 rounded-lg">
-                                {def.description}
-                              </p>
-                            )}
-                            {def.type === 'boolean' ? (
-                              <select 
-                                value={parameterValues[k]||'false'} 
-                                onChange={e=>handleParameterChange(k,e.target.value)} 
-                                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white text-base"
-                              >
-                                <option value="false">False</option>
-                                <option value="true">True</option>
-                              </select>
-                            ) : (
-                              <input 
-                                type={def.type==='number'?'number':'text'} 
-                                value={parameterValues[k]||''} 
-                                onChange={e=>handleParameterChange(k,e.target.value)} 
-                                placeholder={`Enter ${k}...`} 
-                                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white text-base" 
-                                required={required} 
-                              />
-                            )}
+                    {Object.entries(selectedTool.parameters.properties).map(([k,def]) => {
+                      const required = selectedTool.parameters?.required?.includes(k);
+                      
+                      // Check if this parameter has enum options (predefined choices)
+                      const hasEnumOptions = def.enum && Array.isArray(def.enum) && def.enum.length > 0;
+                      const isArrayWithEnum = def.type === 'array' && def.items?.enum && Array.isArray(def.items.enum);
+                      
+                      return (
+                        <div key={k}>
+                          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
+                            <label className="font-semibold text-gray-900 text-sm">
+                              {k} {required && <span className="text-red-500 ml-1">*</span>}
+                            </label>
+                            <span className="text-xs bg-gray-100 px-3 py-1 rounded-full text-gray-700 font-medium w-fit">
+                              {def.type}
+                            </span>
                           </div>
-                        );
-                      })}
+                          {def.description && (
+                            <p className="text-sm text-gray-600 mb-3 bg-gray-50 px-3 sm:px-4 py-2 rounded-lg">
+                              {def.description}
+                            </p>
+                          )}
+                          
+                          {/* Enhanced input rendering with dropdown support and proper defaults */}
+                          {def.type === 'boolean' ? (
+                            <select 
+                              value={parameterValues[k] || 'false'} 
+                              onChange={e=>handleParameterChange(k,e.target.value)} 
+                              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white text-base"
+                            >
+                              <option value="false">False</option>
+                              <option value="true">True</option>
+                            </select>
+                          ) : hasEnumOptions ? (
+                            // Dropdown for parameters with enum options - NO "Select" placeholder, always show default
+                            <select 
+                              value={parameterValues[k] || def.enum[0]} 
+                              onChange={e=>handleParameterChange(k,e.target.value)} 
+                              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white text-base"
+                              required={required}
+                            >
+                              {/* Render each enum option - no placeholder */}
+                              {def.enum.map(option => (
+                                <option key={option} value={option}>
+                                  {option}
+                                </option>
+                              ))}
+                            </select>
+                          ) : isArrayWithEnum ? (
+                            // Multi-select for array parameters with enum options
+                            <select 
+                              multiple
+                              value={(() => {
+                                try {
+                                  const val = parameterValues[k] || '[]';
+                                  // Handle both JSON format and JavaScript array format
+                                  if (val.startsWith('[') && val.endsWith(']')) {
+                                    // Try to parse as JSON first
+                                    try {
+                                      return JSON.parse(val);
+                                    } catch {
+                                      // If JSON parse fails, try to convert single quotes to double quotes
+                                      const jsonVal = val.replace(/'/g, '"');
+                                      return JSON.parse(jsonVal);
+                                    }
+                                  }
+                                  return [];
+                                } catch (error) {
+                                  return [];
+                                }
+                              })()} 
+                              onChange={e => {
+                                const selectedValues = Array.from(e.target.selectedOptions, option => option.value);
+                                handleParameterChange(k, JSON.stringify(selectedValues));
+                              }}
+                              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white text-base min-h-[100px]"
+                              required={required}
+                            >
+                              {def.items.enum.map(option => (
+                                <option key={option} value={option}>
+                                  {option}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            // Default: Regular input for other types
+                            <input 
+                              type={def.type==='number'?'number':'text'} 
+                              value={parameterValues[k]||''} 
+                              onChange={e=>handleParameterChange(k,e.target.value)} 
+                              placeholder={`Enter ${k}...`} 
+                              className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white text-base" 
+                              required={required} 
+                            />
+                          )}
+                          
+                          {/* Helper text for multi-select arrays */}
+                          {isArrayWithEnum && (
+                            <p className="text-xs text-gray-500 mt-1">
+                              Hold Ctrl/Cmd to select multiple options
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
                     </div>
                   </>
                 ) : (

@@ -47,6 +47,16 @@ export const toolPaths = [
 
   //custom tools
   'facebook-marketing-api/facebook-marketing-api-mapi/create-campaign-messages.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/create-ad-set.js',
 
+  'facebook-marketing-api/facebook-marketing-api-mapi/create-ad-set-awareness.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/create-ad-set-sales.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/create-ad-set-engagement.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/create-ad-set-leads.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/create-ad-set-traffic.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/create-ad-set-app-promotion.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/create-ads.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/create-ad-creative.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/create-ad.js',
   
 ];

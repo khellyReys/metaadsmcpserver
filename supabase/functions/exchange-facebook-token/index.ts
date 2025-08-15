@@ -104,7 +104,6 @@ serve(async (req) => {
     const FB_APP_SECRET = Deno.env.get('FACEBOOK_APP_SECRET')
 
     if (!FB_APP_ID || !FB_APP_SECRET) {
-      console.error('Facebook app credentials not configured')
       return new Response(
         JSON.stringify({ 
           success: false, 
@@ -142,7 +141,6 @@ serve(async (req) => {
     const validateData: FacebookTokenDebugResponse = await validateResponse.json()
 
     if (validateData.error) {
-      console.error('Token validation error:', validateData.error)
       return new Response(
         JSON.stringify({ 
           success: false, 
@@ -156,7 +154,6 @@ serve(async (req) => {
     }
 
     if (!validateData.data?.is_valid) {
-      console.error('Invalid token provided')
       return new Response(
         JSON.stringify({ 
           success: false, 
@@ -171,7 +168,6 @@ serve(async (req) => {
 
     // Verify the token belongs to our app
     if (validateData.data.app_id !== FB_APP_ID) {
-      console.error('Token belongs to different app:', validateData.data.app_id)
       return new Response(
         JSON.stringify({ 
           success: false, 
@@ -195,7 +191,6 @@ serve(async (req) => {
     const exchangeData: FacebookTokenResponse = await exchangeResponse.json()
 
     if (exchangeData.error) {
-      console.error('Facebook token exchange error:', exchangeData.error)
       return new Response(
         JSON.stringify({ 
           success: false, 
@@ -209,7 +204,6 @@ serve(async (req) => {
     }
 
     if (!exchangeData.access_token) {
-      console.error('No access token in response:', exchangeData)
       return new Response(
         JSON.stringify({ 
           success: false, 
@@ -235,11 +229,9 @@ serve(async (req) => {
           .filter((perm) => perm.status === 'granted')
           .map((perm) => perm.permission)
       } else if (permissionsData.error) {
-        console.warn('Failed to fetch permissions:', permissionsData.error.message)
         // Don't fail the whole request, just log the warning
       }
     } catch (permError) {
-      console.warn('Error fetching permissions:', permError)
       // Don't fail the whole request
     }
 
@@ -267,7 +259,6 @@ serve(async (req) => {
         }
       }
     } catch (debugError) {
-      console.warn('Error getting token debug info:', debugError)
     }
 
     // Step 6: Return successful response with comprehensive data
@@ -291,7 +282,6 @@ serve(async (req) => {
     )
 
   } catch (error) {
-    console.error('Token exchange error:', error)
     return new Response(
       JSON.stringify({ 
         success: false, 
