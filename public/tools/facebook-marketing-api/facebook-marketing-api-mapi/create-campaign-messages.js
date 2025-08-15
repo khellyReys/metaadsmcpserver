@@ -13,7 +13,7 @@ const executeFunction = async ({
   special_ad_categories = ['NONE'],
   buying_type = 'AUCTION',
   bid_strategy = 'LOWEST_COST_WITHOUT_CAP',
-  daily_budget = 1000,
+  daily_budget = 50000,
   lifetime_budget = null,
   campaign_budget_optimization = true
 }) => {
@@ -378,7 +378,7 @@ const apiTool = {
           },
           daily_budget: {
             type: 'integer',
-            description: 'Daily budget in cents (default: 1000 = $10/day). Used when campaign_budget_optimization is true and no lifetime_budget is set.'
+            description: 'Daily budget in cents (ex. 50000 cents = 500.00). Used when campaign_budget_optimization is true and no lifetime_budget is set.'
           },
           lifetime_budget: {
             type: 'integer',

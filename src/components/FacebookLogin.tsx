@@ -27,7 +27,14 @@ interface Server {
 }
 
 interface FacebookLoginProps {
-  onServerSelected: (serverId: string, businessId: string, serverData: any) => void;
+  // Updated interface to match the corrected flow
+  onServerSelected: (
+    serverId: string,
+    businessId: string,
+    adAccountId: string,
+    pageId: string,
+    serverAccessToken: string
+  ) => void;
   initialAuthData?: any;
 }
 
@@ -58,7 +65,6 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
   // Initialize auth state and handle initial auth data
   useEffect(() => {
     if (initialAuthData) {
-      
       setCurrentUser(initialAuthData.user);
       setUserSession(initialAuthData.session);
       
@@ -90,7 +96,6 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
         }
 
         if (session?.user && mounted) {
-          
           setCurrentUser(session.user);
           setUserSession(session);
           
@@ -113,7 +118,6 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
 
     // Listen for auth state changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      
       try {
         if (event === 'SIGNED_IN' && session?.user && mounted) {
           setCurrentUser(session.user);
@@ -154,8 +158,6 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
   const processAuthenticatedUser = async (session: any) => {
     try {
       const user = session.user;
-      
-      
       const facebookData = {
         id: user.user_metadata?.provider_id || user.user_metadata?.sub,
         name: user.user_metadata?.full_name || user.user_metadata?.name,
@@ -176,12 +178,10 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
   const exchangeTokenAndSaveUser = async (providerToken: string, facebookData: any, supabaseUser: any) => {
     try {
       if (!providerToken) {
-        console.warn('No provider token available, using basic data');
         await saveUserToDatabase(null, facebookData, supabaseUser);
         return;
       }
 
-      
       const { data: { session } } = await supabase.auth.getSession();
       
       const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/exchange-facebook-token`, {
@@ -204,11 +204,9 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
       const data = await response.json();
 
       if (data.success) {
-
         setFacebookAccessToken(data.longLivedToken);
         await saveUserToDatabase(data, facebookData, supabaseUser);
       } else {
-        console.warn('Token exchange failed, using provider token:', data.error);
         await saveUserToDatabase(null, facebookData, supabaseUser, providerToken);
       }
 
@@ -222,6 +220,7 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
       const tokenToUse = tokenData?.longLivedToken || fallbackToken || facebookAccessToken;
       const expiresAt = tokenData?.expiresAt || new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
       const scopes = tokenData?.grantedScopes || ['email', 'pages_read_engagement', 'business_management', 'ads_management'];
+      
       const { data: userAccessToken, error: dbError } = await supabase
         .rpc('upsert_user_with_facebook_data', {
           p_user_id: supabaseUser.id,
@@ -240,7 +239,6 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
       if (dbError) {
         throw new Error('Failed to save user data: ' + dbError.message);
       }
-
 
       // Ensure we have the token in state
       if (tokenToUse && !facebookAccessToken) {
@@ -302,13 +300,20 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
     setServers(prev => [newServer, ...prev]);
   };
 
-  const handleBusinessSelected = async (businessId: string) => {
-    if (!currentUser || !selectedServer) return;
+  // Updated handler to match the new signature
+  const handleBusinessSelected = async (
+    serverId: string,
+    businessId: string,
+    adAccountId: string,
+    pageId: string,
+    serverAccessToken: string
+  ) => {
+    if (!currentUser) return;
 
     try {
       const { data: updateResult, error: updateError } = await supabase
         .rpc('update_server_business', {
-          p_server_id: selectedServer,
+          p_server_id: serverId,
           p_business_id: businessId
         });
 
@@ -317,7 +322,7 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
       }
 
       const selectedBusinessData = businessAccounts.find(b => b.id === businessId);
-      const selectedServerData = servers.find(s => s.id === selectedServer);
+      const selectedServerData = servers.find(s => s.id === serverId);
       
       const { data: userData } = await supabase
         .from('users')
@@ -325,13 +330,14 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
         .eq('id', currentUser.id)
         .single();
 
-      onServerSelected(selectedServer, businessId, {
-        user: userData,
-        business: selectedBusinessData,
-        server: selectedServerData,
-        accessToken: facebookAccessToken,
-        session: userSession
-      });
+      // Call with all required parameters
+      onServerSelected(
+        serverId,
+        businessId,
+        adAccountId,
+        pageId,
+        serverAccessToken
+      );
     } catch (err) {
       setError(`Failed to select business: ${err instanceof Error ? err.message : 'Unknown error'}`);
     }

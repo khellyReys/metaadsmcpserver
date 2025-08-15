@@ -6,8 +6,34 @@
  * @param {string} [args.base_url='https://graph.facebook.com/v18.0'] - The base URL for the Facebook Graph API.
  * @returns {Promise<Object>} - The details of the campaigns.
  */
-const executeFunction = async ({ account_id, base_url = 'https://graph.facebook.com/v18.0' }) => {
-  const token = process.env.FACEBOOK_MARKETING_API_API_KEY;
+const executeFunction = async ({ account_id, userId, base_url = 'https://graph.facebook.com/v18.0' }) => {
+
+  const { createClient } = await import('@supabase/supabase-js');
+  
+    const supabase = createClient(
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY,
+      { auth: { autoRefreshToken: false, persistSession: false } }
+    );
+
+  const getFacebookToken = async (userId) => {
+    const { data, error } = await supabase
+      .from('users')
+      .select('facebook_long_lived_token')
+      .eq('id', userId)
+      .single();
+
+    if (error) throw new Error(`Supabase query failed: ${error.message}`);
+    return data?.facebook_long_lived_token || null;
+  };
+
+  const token = await getFacebookToken(userId);
+      if (!token) {
+        return {
+          error: 'No Facebook access token found for the user who owns this ad account',
+          details: `Account ${account_id} belongs to user ${userId} but they have no Facebook token`,
+        };
+      }
   
   // Validate token exists
   if (!token) {

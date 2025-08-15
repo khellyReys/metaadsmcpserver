@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowRight, Building2, Users, CheckCircle, AlertCircle, RefreshCw, Server } from 'lucide-react';
+import { ArrowRight, Building2, Users, CheckCircle, AlertCircle, RefreshCw, Server, FileText } from 'lucide-react';
 import { SupabaseClient } from '@supabase/supabase-js';
 
 interface BusinessAccount {
@@ -19,6 +19,20 @@ interface AdAccount {
   account_role: string;
 }
 
+interface FacebookPage {
+  id: string;
+  name: string;
+  category: string;
+  page_role: string;
+  picture_url: string;
+  cover_url: string;
+  is_published: boolean;
+  verification_status: string;
+  followers_count: number;
+  website: string;
+  about: string;
+}
+
 interface Server {
   id: string;
   name: string;
@@ -35,7 +49,14 @@ interface BusinessSelectionStepProps {
   selectedBusiness: string;
   facebookAccessToken: string;
   error: string;
-  onBusinessSelected: (businessId: string) => void;
+  // Updated handler signature to include all required parameters
+  onBusinessSelected: (
+    serverId: string,
+    businessId: string,
+    adAccountId: string,
+    pageId: string,
+    serverAccessToken: string
+  ) => void;
   onBusinessSelectionChange: (businessId: string) => void;
   onBusinessAccountsChange: (accounts: BusinessAccount[]) => void;
   onBackToServers: () => void;
@@ -63,11 +84,16 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   
-  // New state for ad account selection
-  const [currentStep, setCurrentStep] = useState<'business' | 'adaccount'>('business');
+  // Updated state for multi-step selection
+  const [currentStep, setCurrentStep] = useState<'business' | 'adaccount' | 'page'>('business');
   const [adAccounts, setAdAccounts] = useState<AdAccount[]>([]);
   const [selectedAdAccount, setSelectedAdAccount] = useState<string>('');
   const [loadingAdAccounts, setLoadingAdAccounts] = useState(false);
+  
+  // New state for Facebook page selection
+  const [facebookPages, setFacebookPages] = useState<FacebookPage[]>([]);
+  const [selectedPage, setSelectedPage] = useState<string>('');
+  const [loadingPages, setLoadingPages] = useState(false);
 
   // Load business accounts when component mounts
   useEffect(() => {
@@ -277,7 +303,7 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
     }
   };
 
-  // New function to fetch ad accounts for selected business
+  // Function to fetch ad accounts for selected business
   const fetchAdAccountsForBusiness = async (businessId: string) => {
     setLoadingAdAccounts(true);
     try {
@@ -293,10 +319,30 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
 
       setAdAccounts(adAccountsData || []);
     } catch (error) {
-      console.error('Error fetching ad accounts:', error);
       setAdAccounts([]);
     } finally {
       setLoadingAdAccounts(false);
+    }
+  };
+
+  // New function to fetch Facebook pages
+  const fetchFacebookPages = async () => {
+    setLoadingPages(true);
+    try {
+      const { data: pagesData, error } = await supabase
+        .from('facebook_pages')
+        .select('id, name, category, page_role, picture_url, cover_url, is_published, verification_status, followers_count, website, about')
+        .eq('user_id', currentUser.id);
+
+      if (error) {
+        throw new Error('Failed to load Facebook pages: ' + error.message);
+      }
+
+      setFacebookPages(pagesData || []);
+    } catch (error) {
+      setFacebookPages([]);
+    } finally {
+      setLoadingPages(false);
     }
   };
 
@@ -316,17 +362,40 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
     onBusinessSelectionChange(businessId);
   };
 
-  // Updated continue handler
+  // Updated continue handler for three-step flow
   const handleContinue = async () => {
     if (currentStep === 'business' && selectedBusiness) {
       // Move to ad account selection
       await fetchAdAccountsForBusiness(selectedBusiness);
       setCurrentStep('adaccount');
     } else if (currentStep === 'adaccount' && selectedAdAccount) {
-      // Continue with selected ad account
+      // Move to page selection
+      await fetchFacebookPages();
+      setCurrentStep('page');
+    } else if (currentStep === 'page' && selectedPage) {
+      // Continue with all selections
       setIsProcessing(true);
       try {
-        await onBusinessSelected(selectedAdAccount); // ← Now passes ad account ID
+
+        // If selectedPage is an object, extract just the ID
+        const pageIdToSend = typeof selectedPage === 'object' && selectedPage?.id 
+          ? selectedPage.id 
+          : selectedPage;
+
+        // Get server access token
+        const selectedServerData = servers.find(s => s.id === selectedServer);
+        if (!selectedServerData) {
+          throw new Error('Server not found');
+        }
+
+        // Call with all required parameters
+        await onBusinessSelected(
+          selectedServer,                           // serverId
+          selectedBusiness,                         // businessId
+          selectedAdAccount,                        // adAccountId
+          pageIdToSend,                            // pageId
+          selectedServerData.access_token          // serverAccessToken
+        );
       } catch (error) {
         // Error handled by parent component
       } finally {
@@ -335,12 +404,66 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
     }
   };
 
-  // New back button handler
+  // Updated back button handlers
   const handleBackToBusiness = () => {
     setCurrentStep('business');
     setSelectedAdAccount('');
     setAdAccounts([]);
+    setSelectedPage('');
+    setFacebookPages([]);
   };
+
+  const handleBackToAdAccounts = () => {
+    setCurrentStep('adaccount');
+    setSelectedPage('');
+    setFacebookPages([]);
+  };
+
+  // Helper function to get step title and description
+  const getStepInfo = () => {
+    switch (currentStep) {
+      case 'business':
+        return {
+          title: 'Select Business Manager Account',
+          description: 'Choose the business account you want to manage ads for'
+        };
+      case 'adaccount':
+        return {
+          title: 'Select Ad Account',
+          description: 'Choose the ad account you want to manage'
+        };
+      case 'page':
+        return {
+          title: 'Select Facebook Page',
+          description: 'Choose the Facebook page you want to connect'
+        };
+      default:
+        return { title: '', description: '' };
+    }
+  };
+
+  const stepInfo = getStepInfo();
+
+  const getContinueButtonState = () => {
+    if (currentStep === 'business') {
+      return {
+        isLoading: loadingAdAccounts,
+        label: loadingAdAccounts ? 'Loading ad accounts...' : 'Continue to Ad Accounts',
+      };
+    }
+    if (currentStep === 'adaccount') {
+      return {
+        isLoading: loadingPages,
+        label: loadingPages ? 'Loading Facebook pages...' : 'Continue to Pages',
+      };
+    }
+    // currentStep === 'page'
+    return {
+      isLoading: isProcessing,
+      label: isProcessing ? 'Configuring account...' : 'Continue to Tools',
+    };
+  };
+  
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 p-4">
@@ -377,26 +500,55 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
             </div>
           )}
 
-          {/* Dynamic header based on current step */}
-          {currentStep === 'business' ? (
-            <>
-              <h1 className="text-3xl font-bold text-gray-900 mb-2">Select Business Manager Account</h1>
-              <p className="text-gray-600">Choose the business account you want to manage ads for</p>
-            </>
-          ) : (
-            <>
-              <h1 className="text-3xl font-bold text-gray-900 mb-2">Select Ad Account</h1>
-              <p className="text-gray-600">Choose the ad account you want to manage</p>
-              
-              {/* Selected Business Info */}
-              <div className="bg-blue-50 rounded-lg p-3 mt-4 max-w-md mx-auto">
+          {/* Step Progress Indicator */}
+          <div className="flex items-center justify-center space-x-4 mb-6">
+            <div className={`flex items-center space-x-2 ${currentStep === 'business' ? 'text-blue-600' : currentStep === 'adaccount' || currentStep === 'page' ? 'text-green-600' : 'text-gray-400'}`}>
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold ${currentStep === 'business' ? 'bg-blue-100' : currentStep === 'adaccount' || currentStep === 'page' ? 'bg-green-100' : 'bg-gray-100'}`}>
+                1
+              </div>
+              <span className="text-sm font-medium">Business</span>
+            </div>
+            
+            <ArrowRight className={`w-4 h-4 ${currentStep === 'adaccount' || currentStep === 'page' ? 'text-green-600' : 'text-gray-400'}`} />
+            
+            <div className={`flex items-center space-x-2 ${currentStep === 'adaccount' ? 'text-blue-600' : currentStep === 'page' ? 'text-green-600' : 'text-gray-400'}`}>
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold ${currentStep === 'adaccount' ? 'bg-blue-100' : currentStep === 'page' ? 'bg-green-100' : 'bg-gray-100'}`}>
+                2
+              </div>
+              <span className="text-sm font-medium">Ad Account</span>
+            </div>
+            
+            <ArrowRight className={`w-4 h-4 ${currentStep === 'page' ? 'text-green-600' : 'text-gray-400'}`} />
+            
+            <div className={`flex items-center space-x-2 ${currentStep === 'page' ? 'text-blue-600' : 'text-gray-400'}`}>
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold ${currentStep === 'page' ? 'bg-blue-100' : 'bg-gray-100'}`}>
+                3
+              </div>
+              <span className="text-sm font-medium">Page</span>
+            </div>
+          </div>
+
+          {/* Dynamic header */}
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">{stepInfo.title}</h1>
+          <p className="text-gray-600">{stepInfo.description}</p>
+
+          {/* Selection Context Info */}
+          {currentStep !== 'business' && (
+            <div className="bg-blue-50 rounded-lg p-3 mt-4 max-w-md mx-auto">
+              {selectedBusiness && (
                 <p className="text-blue-900 text-sm">
                   <strong>Business:</strong> {businessAccounts.find(b => b.id === selectedBusiness)?.name}
                 </p>
-              </div>
-            </>
+              )}
+              {currentStep === 'page' && selectedAdAccount && (
+                <p className="text-blue-900 text-sm">
+                  <strong>Ad Account:</strong> {adAccounts.find(a => a.id === selectedAdAccount)?.name}
+                </p>
+              )}
+            </div>
           )}
           
+          {/* Navigation buttons */}
           <div className="flex items-center justify-center space-x-4 mt-4">
             {currentStep === 'business' ? (
               <>
@@ -417,13 +569,21 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
                   <span>Back to Servers</span>
                 </button>
               </>
-            ) : (
+            ) : currentStep === 'adaccount' ? (
               <button
                 onClick={handleBackToBusiness}
                 className="inline-flex items-center space-x-2 text-gray-600 hover:text-gray-700 text-sm"
               >
                 <ArrowRight className="w-4 h-4 rotate-180" />
                 <span>Back to Business Selection</span>
+              </button>
+            ) : (
+              <button
+                onClick={handleBackToAdAccounts}
+                className="inline-flex items-center space-x-2 text-gray-600 hover:text-gray-700 text-sm"
+              >
+                <ArrowRight className="w-4 h-4 rotate-180" />
+                <span>Back to Ad Account Selection</span>
               </button>
             )}
           </div>
@@ -439,8 +599,8 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
           </div>
         )}
 
-        {/* Business Accounts or Ad Accounts */}
-        {businessAccounts.length === 0 ? (
+        {/* Content based on current step */}
+        {businessAccounts.length === 0 && currentStep === 'business' ? (
           <div className="text-center py-12">
             <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
               <Building2 className="w-8 h-8 text-gray-400" />
@@ -511,14 +671,12 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
             {/* Ad Account Selection - Show when step is 'adaccount' */}
             {currentStep === 'adaccount' && (
               <>
-                {/* Loading State */}
                 {loadingAdAccounts ? (
                   <div className="text-center py-12">
                     <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
                     <p className="text-gray-600">Loading ad accounts...</p>
                   </div>
                 ) : adAccounts.length === 0 ? (
-                  /* No Ad Accounts */
                   <div className="text-center py-12">
                     <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
                       <AlertCircle className="w-8 h-8 text-gray-400" />
@@ -529,7 +687,6 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
                     </p>
                   </div>
                 ) : (
-                  /* Ad Accounts Grid */
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
                     {adAccounts.map((adAccount) => (
                       <div
@@ -576,29 +733,129 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
               </>
             )}
 
-            {/* Continue Button - Updated to handle both steps */}
+            {/* Facebook Page Selection - Show when step is 'page' */}
+            {currentStep === 'page' && (
+              <>
+                {loadingPages ? (
+                  <div className="text-center py-12">
+                    <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                    <p className="text-gray-600">Loading Facebook pages...</p>
+                  </div>
+                ) : facebookPages.length === 0 ? (
+                  <div className="text-center py-12">
+                    <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                      <AlertCircle className="w-8 h-8 text-gray-400" />
+                    </div>
+                    <h3 className="text-lg font-medium text-gray-900 mb-2">No Facebook Pages Found</h3>
+                    <p className="text-gray-600 mb-4">
+                      You don't have access to any Facebook pages.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                    {facebookPages.map((page) => (
+                      <div
+                        key={page.id}
+                        onClick={() => setSelectedPage(page.id)}
+                        className={`bg-white rounded-xl p-6 border-2 cursor-pointer transition-all duration-200 hover:shadow-lg ${
+                          selectedPage === page.id
+                            ? 'border-blue-500 shadow-lg'
+                            : 'border-gray-200 hover:border-gray-300'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between mb-4">
+                          <div className="flex items-center space-x-3">
+                            {page.picture_url ? (
+                              <img 
+                                src={page.picture_url} 
+                                alt={page.name}
+                                className="w-12 h-12 rounded-lg object-cover"
+                              />
+                            ) : (
+                              <div className="w-12 h-12 bg-gradient-to-br from-purple-100 to-pink-100 rounded-lg flex items-center justify-center">
+                                <FileText className="w-6 h-6 text-purple-600" />
+                              </div>
+                            )}
+                            <div>
+                              <h3 className="font-semibold text-gray-900">{page.name}</h3>
+                              <p className="text-sm text-gray-500">{page.category}</p>
+                              {page.verification_status && (
+                                <p className="text-xs text-blue-600">{page.verification_status}</p>
+                              )}
+                            </div>
+                          </div>
+                          {selectedPage === page.id && (
+                            <CheckCircle className="w-6 h-6 text-blue-500" />
+                          )}
+                        </div>
+
+                        <div className="flex items-center justify-between text-sm">
+                          <div className="flex items-center space-x-4">
+                            <div className="flex items-center space-x-1">
+                              <Users className="w-4 h-4 text-gray-400" />
+                              <span className="text-gray-600">
+                                {page.followers_count ? `${page.followers_count.toLocaleString()} followers` : 'No followers data'}
+                              </span>
+                            </div>
+                          </div>
+                          <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                            page.is_published
+                              ? 'bg-green-100 text-green-700'
+                              : 'bg-yellow-100 text-yellow-700'
+                          }`}>
+                            {page.is_published ? 'Published' : 'Unpublished'}
+                          </span>
+                        </div>
+
+                        {/* Additional page info */}
+                        {(page.website || page.about) && (
+                          <div className="mt-3 pt-3 border-t border-gray-100">
+                            {page.website && (
+                              <p className="text-xs text-gray-600 mb-1">
+                                <strong>Website:</strong> {page.website}
+                              </p>
+                            )}
+                            {page.about && (
+                              <p className="text-xs text-gray-600 line-clamp-2">
+                                <strong>About:</strong> {page.about}
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* Continue Button - Updated to handle all three steps */}
             {((currentStep === 'business' && selectedBusiness) || 
-              (currentStep === 'adaccount' && selectedAdAccount)) && (
+              (currentStep === 'adaccount' && selectedAdAccount) ||
+              (currentStep === 'page' && selectedPage)) && (
               <div className="text-center">
-                <button
-                  onClick={handleContinue}
-                  disabled={isProcessing}
-                  className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-8 py-3 rounded-xl font-semibold hover:shadow-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2 mx-auto"
-                >
-                  {isProcessing ? (
-                    <>
-                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                      <span>Configuring account...</span>
-                    </>
-                  ) : (
-                    <>
-                      <span>
-                        {currentStep === 'business' ? 'Continue to Ad Accounts' : 'Continue to Dashboard'}
-                      </span>
-                      <ArrowRight className="w-4 h-4" />
-                    </>
-                  )}
-                </button>
+                {(() => {
+                  const { isLoading, label } = getContinueButtonState();
+                  return (
+                    <button
+                      onClick={handleContinue}
+                      disabled={isLoading}
+                      className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-8 py-3 rounded-xl font-semibold hover:shadow-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2 mx-auto"
+                    >
+                      {isLoading ? (
+                        <>
+                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                          <span>{label}</span>
+                        </>
+                      ) : (
+                        <>
+                          <span>{label}</span>
+                          <ArrowRight className="w-4 h-4" />
+                        </>
+                      )}
+                    </button>
+                  );
+                })()}
               </div>
             )}
           </>

@@ -28,6 +28,7 @@ interface ServerManagementStepProps {
   onClearError: () => void;
   supabase: SupabaseClient;
   facebookAccessToken: string;
+  // Updated interface to match the new flow
   onCompleteServerSelection: (serverId: string, businessAccounts: BusinessAccount[]) => void;
 }
 
@@ -285,7 +286,6 @@ const ServerManagementStep: React.FC<ServerManagementStepProps> = ({
           }
         }
       } catch (pageError) {
-        // Don't fail the entire process for page errors
       }
 
       // Step 7: Complete
@@ -300,7 +300,7 @@ const ServerManagementStep: React.FC<ServerManagementStepProps> = ({
       
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      setLoadingError(`Failed to load business accounts: ${errorMessage}`);
+      setLoadingError(`Failed to load business accounts: ${errorMessage}. Please logout and try again!`);
       
       // Reset loading state after showing error briefly
       setTimeout(() => {
@@ -317,7 +317,7 @@ const ServerManagementStep: React.FC<ServerManagementStepProps> = ({
       <div className="max-w-4xl mx-auto pt-8">
         {/* Header */}
         <div className="text-center mb-8">
-        {currentUser && (
+          {currentUser && (
             <div className="flex items-center justify-center space-x-3 mb-4">
               {currentUser.user_metadata?.avatar_url && (
                 <img 

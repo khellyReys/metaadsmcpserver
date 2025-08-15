@@ -4,7 +4,13 @@ import FacebookLogin from './FacebookLogin';
 import authService from '../auth/authService';
 
 interface DashboardProps {
-  onServerSelected: (serverId: string, businessId: string) => void;
+  onServerSelected: (
+    serverId: string,
+    businessId: string,
+    adAccountId: string,
+    pageId: string,
+    serverAccessToken: string
+  ) => void;
 }
 
 const Dashboard: React.FC<DashboardProps> = ({ onServerSelected }) => {
@@ -24,7 +30,6 @@ const Dashboard: React.FC<DashboardProps> = ({ onServerSelected }) => {
 
         // Use the auth service to check authentication status
         const authStatus = await authService.checkAuthStatus();
-        console.log('Auth status:', authStatus); // Debug log
         
         if (authStatus.isAuthenticated) {
           setIsAuthenticated(true);
@@ -224,11 +229,6 @@ const Dashboard: React.FC<DashboardProps> = ({ onServerSelected }) => {
         <FacebookLogin 
           onServerSelected={onServerSelected} 
           initialAuthData={authData}
-          onAuthComplete={handleAuthComplete}
-          onAuthError={handleAuthError}
-          skipLogin={true}
-          authData={authData}
-          userProfile={userProfile}
         />
       </div>
     );
@@ -239,9 +239,6 @@ const Dashboard: React.FC<DashboardProps> = ({ onServerSelected }) => {
     <FacebookLogin 
       onServerSelected={onServerSelected} 
       initialAuthData={null}
-      onAuthComplete={handleAuthComplete}
-      onAuthError={handleAuthError}
-      skipLogin={false}
     />
   );
 };

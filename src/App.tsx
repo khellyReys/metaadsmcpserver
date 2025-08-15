@@ -69,25 +69,36 @@ const AuthCallback = () => {
 
 // Main app wrapper component
 const AppContent = () => {
+  // Updated state to handle all required parameters
   const [selectedBusinessId, setSelectedBusinessId] = useState<string>('');
-  const [mcpSecret, setMcpSecret] = useState<string>('');
+  const [selectedAdAccountId, setSelectedAdAccountId] = useState<string>('');
+  const [selectedPageId, setSelectedPageId] = useState<string>('');
+  const [serverId, setServerId] = useState<string>('');
+  const [serverAccessToken, setServerAccessToken] = useState<string>('');
+  
   const navigate = useNavigate();
-  const location = useLocation();
 
-  // Debug: Log current location
-  useEffect(() => {
-  }, [location]);
-
-  const handleBusinessSelected = (serverId: string, businessId: string) => {
-    console.log('Business selected:', { serverId, businessId }); // Debug log
+  // Updated handler to accept all required parameters
+  const handleBusinessSelected = (
+    serverIdParam: string,
+    businessId: string,
+    adAccountId: string,
+    pageId: string,
+    serverAccessTokenParam: string
+  ) => {
     
-    if (!serverId || !businessId) {
-      console.error('Missing required data:', { serverId, businessId });
+    if (!serverIdParam || !businessId || !adAccountId || !pageId || !serverAccessTokenParam) {
+      
       return;
     }
     
+    // Set all required state
     setSelectedBusinessId(businessId);
-    setMcpSecret(serverId);
+    setSelectedAdAccountId(adAccountId);
+    setSelectedPageId(pageId);
+    setServerId(serverIdParam);
+    setServerAccessToken(serverAccessTokenParam);
+    
     navigate('/workspace');
   };
 
@@ -95,9 +106,12 @@ const AppContent = () => {
     // Use auth service to logout
     authService.logout();
     
-    // Clear business selection state
+    // Clear all selection state
     setSelectedBusinessId('');
-    setMcpSecret('');
+    setSelectedAdAccountId('');
+    setSelectedPageId('');
+    setServerId('');
+    setServerAccessToken('');
     
     navigate('/');
   };
@@ -119,12 +133,14 @@ const AppContent = () => {
       <Route 
         path="/workspace" 
         element={
-          selectedBusinessId && mcpSecret ? (
+          selectedBusinessId && selectedAdAccountId && selectedPageId && serverId && serverAccessToken ? (
             <AdTools
-              accountId={selectedBusinessId}
-              secret={mcpSecret}
-              mcpServerLink={import.meta.env.VITE_MCP_SERVER_URL || "https://localhost:3000"}
-              onLogout={handleLogout}
+              businessId={selectedBusinessId}
+              adAccountId={selectedAdAccountId}
+              pageId={selectedPageId}
+              secret={serverId} // Using serverId as secret - adjust if needed
+              serverId={serverId}
+              serverAccessToken={serverAccessToken}
             />
           ) : (
             <Navigate to="/dashboard" replace />
