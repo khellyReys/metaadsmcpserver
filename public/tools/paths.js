@@ -58,5 +58,8 @@ export const toolPaths = [
   'facebook-marketing-api/facebook-marketing-api-mapi/create-ads.js',
   'facebook-marketing-api/facebook-marketing-api-mapi/create-ad-creative.js',
   'facebook-marketing-api/facebook-marketing-api-mapi/create-ad.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/upload-ad-image.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/create-ad-creative-from-post.js',
+  
   
 ];
