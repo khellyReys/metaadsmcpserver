@@ -6,34 +6,155 @@
  * @param {string} [args.base_url='https://graph.facebook.com/v18.0'] - The base URL for the Facebook Graph API.
  * @returns {Promise<Object>} - The details of the campaigns.
  */
-const executeFunction = async ({ account_id, base_url = 'https://graph.facebook.com/v18.0' }) => {
-  // Enhanced parameter validation
-  if (!account_id || account_id === 'undefined' || account_id === 'null') {
-    throw new Error('account_id is required and cannot be undefined or null');
-  }
+const executeFunction = async ({ account_id, base_url }) => {
+  // Get Facebook token from database instead of environment variable
+  const { createClient } = await import('@supabase/supabase-js');
   
-  if (typeof account_id !== 'string') {
-    throw new Error('account_id must be a string');
-  }
-  
-  // Trim and validate account_id format
-  const cleanAccountId = account_id.trim();
-  if (!cleanAccountId) {
-    throw new Error('account_id cannot be empty or whitespace only');
+  // Create Supabase client only when function executes
+  const supabase = createClient(
+    process.env.SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY,
+    {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
+      }
+    }
+  );
+
+  // Helper function to get user ID from account ID (defined inside executeFunction)
+  const getUserFromAccount = async (supabase, accountId) => {
+    console.log('🔍 Finding user for account ID:', accountId);
+    console.log('🔍 Account ID type:', typeof accountId, 'Value:', JSON.stringify(accountId));
+    
+    if (!accountId) {
+      throw new Error('Account ID is required');
+    }
+
+    try {
+      // Convert to string to ensure type consistency
+      const accountIdStr = String(accountId).trim();
+      
+      console.log('🔧 Searching for account ID (as string):', accountIdStr);
+      
+      // Query without .single() first to see what we get
+      const { data: allData, error: allError, count } = await supabase
+        .from('facebook_ad_accounts')
+        .select('user_id, id, name', { count: 'exact' })
+        .eq('id', accountIdStr);
+
+      console.log('📊 Query results:', { 
+        count, 
+        allData, 
+        allError, 
+        searchedAccountId: accountIdStr 
+      });
+
+      if (allError) {
+        console.error('❌ Account lookup error:', allError);
+        throw new Error(`Account lookup failed: ${allError.message}`);
+      }
+
+      if (!allData || allData.length === 0) {
+        console.warn('⚠️ No accounts found with ID:', accountIdStr);
+        
+        // Let's also try a broader search to see what accounts exist
+        const { data: sampleData } = await supabase
+          .from('facebook_ad_accounts')
+          .select('id, name')
+          .limit(5);
+        
+        console.log('📋 Sample accounts in database:', sampleData);
+        
+        throw new Error(`Ad account ${accountIdStr} not found in database. Check if the account ID is correct.`);
+      }
+
+      if (allData.length > 1) {
+        console.warn('⚠️ Multiple accounts found with same ID:', allData);
+        console.log('🔧 Using first account from duplicates');
+      }
+
+      const userData = allData[0];
+      
+      if (!userData.user_id) {
+        throw new Error(`Account ${accountIdStr} found but has no associated user_id`);
+      }
+      
+      console.log('✅ Found user ID:', userData.user_id, 'for account:', userData.name);
+      return userData.user_id;
+    } catch (error) {
+      console.error('💥 Error in getUserFromAccount:', error);
+      throw error;
+    }
+  };
+
+  // Helper function to get Facebook token (defined inside executeFunction)
+  const getFacebookToken = async (supabase, userId) => {
+    console.log('🔍 Attempting to get Facebook token for userId:', userId);
+    
+    if (!userId) {
+      throw new Error('User ID is required');
+    }
+
+    if (!supabase) {
+      throw new Error('Supabase client is required');
+    }
+
+    try {
+      console.log('📡 Making Supabase query...');
+      const { data, error } = await supabase
+        .from('users')
+        .select('facebook_long_lived_token')
+        .eq('id', userId)
+        .single();
+
+      console.log('📊 Supabase response:', { data, error });
+
+      if (error) {
+        console.error('❌ Supabase error:', error);
+        throw new Error(`Supabase query failed: ${error.message}`);
+      }
+
+      if (!data) {
+        console.warn('⚠️ No user found with ID:', userId);
+        return null;
+      }
+
+      if (!data.facebook_long_lived_token) {
+        console.warn('⚠️ User found but no Facebook token for user ID:', userId);
+        return null;
+      }
+
+      console.log('✅ Facebook token retrieved successfully');
+      return data.facebook_long_lived_token;
+    } catch (error) {
+      console.error('💥 Error in getFacebookToken:', error);
+      throw error;
+    }
+  };
+
+  // Simple parameter validation (adopting the less strict approach)
+  if (!account_id) {
+    throw new Error('account_id is required');
   }
   
   // Remove 'act_' prefix if present to ensure consistent format
-  const normalizedAccountId = cleanAccountId.replace(/^act_/, '');
-  
-  const token = process.env.FACEBOOK_MARKETING_API_API_KEY;
-  
-  // Validate token exists
-  if (!token) {
-    throw new Error('FACEBOOK_MARKETING_API_API_KEY environment variable is not set');
-  }
+  const normalizedAccountId = String(account_id).replace(/^act_/, '');
   
   try {
-    // Construct the URL for the request
+    console.log('🔍 Processing campaign details request for account:', normalizedAccountId);
+
+    // Step 1: Find the user who owns this ad account
+    const userId = await getUserFromAccount(supabase, normalizedAccountId);
+    
+    // Step 2: Get Facebook token for that user
+    const token = await getFacebookToken(supabase, userId);
+    
+    if (!token) {
+      throw new Error('No Facebook access token found for the user who owns this ad account');
+    }
+
+    // Construct the URL for the request using the passed account_id
     const url = `${base_url}/act_${normalizedAccountId}/campaigns?fields=id,name,objective,account_id,buying_type,daily_budget,lifetime_budget,spend_cap,bid_strategy,pacing_type,status,effective_status,promoted_object,recommendations,start_time,stop_time,created_time,updated_time,adlabels,issues_info,special_ad_categories,special_ad_category_country,smart_promotion_type,is_skadnetwork_attribution`;
 
     // Set up headers for the request
