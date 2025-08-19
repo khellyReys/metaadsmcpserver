@@ -44,7 +44,21 @@ export const toolPaths = [
   'facebook-marketing-api/facebook-marketing-api-mapi/get-insight-for-ads-group.js',
   'facebook-marketing-api/facebook-marketing-api-mapi/get-report-for-insight-2.js',
   'facebook-marketing-api/facebook-marketing-api-mapi/reportid-breakdown-generate.js',
+
+  //custom tools
   'facebook-marketing-api/facebook-marketing-api-mapi/create-campaign.js',
-  'facebook-marketing-api/facebook-marketing-api-mapi/create-campaign-test.js',
-  'facebook-marketing-api/facebook-marketing-api-mapi/create-campaign-messages.js'
+  'facebook-marketing-api/facebook-marketing-api-mapi/create-ad-set.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/create-ad-set-awareness.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/create-ad-set-sales.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/create-ad-set-engagement.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/create-ad-set-leads.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/create-ad-set-traffic.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/create-ad-set-app-promotion.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/create-ads.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/create-ad-creative.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/create-ad.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/upload-ad-image.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/create-ad-creative-from-post.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/get-campaign-details-2.js',
+  
 ];

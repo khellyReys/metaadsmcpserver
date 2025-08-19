@@ -328,7 +328,7 @@ const apiTool = {
   definition: {
     type: 'function',
     function: {
-      name: 'create-campaign-messages',
+      name: 'create-campaign',
       description: 'Create a Facebook campaign with the specified objective. Choose the appropriate objective based on your campaign goals.',
       parameters: {
         type: 'object',

@@ -1,446 +1,398 @@
 /**
- * Function to create a campaign using the Facebook Marketing API v22.0+.
- * Based on official Meta documentation with accurate parameters and validation.
- *
- * @param {Object} args - Arguments for creating a campaign.
- * @param {string} args.account_id - The ID of the ad account to create the campaign under.
- * @param {string} args.name - The name of the campaign.
- * @param {string} [args.objective="OUTCOME_TRAFFIC"] - Campaign objective from the new outcome-driven experiences.
- * @param {string} [args.status="PAUSED"] - Campaign status. PAUSED is recommended for initial creation.
- * @param {Array} [args.special_ad_categories=[]] - REQUIRED: Special ad categories for compliance.
- * @param {string} [args.buying_type="AUCTION"] - Buying type: AUCTION or RESERVED.
- * @param {string} [args.bid_strategy] - Bid strategy when using campaign budget optimization.
- * @param {number} [args.daily_budget] - Daily budget in dollars (converted to cents - minimum $1.00).
- * @param {number} [args.lifetime_budget] - Lifetime budget in dollars (converted to cents - minimum $1.00).
- * @param {number} [args.spend_cap] - Spending limit in dollars (converted to cents - minimum $100.00).
- * @param {Object} [args.promoted_object] - Object being promoted (required for some objectives).
- * @param {boolean} [args.is_skadnetwork_attribution=false] - Enable for iOS 14+ app promotion campaigns.
- * @param {string} [args.access_token] - Override token (uses env var if not provided).
- * @returns {Promise<Object>} - The result of the campaign creation with success/error status.
+ * MCP Tool for creating Facebook campaigns for engagement/conversations
+ */
+
+/**
+ * Create a Facebook campaign for driving conversations/engagement
  */
 const executeFunction = async ({ 
-    account_id, 
-    name, 
-    objective = 'OUTCOME_TRAFFIC', 
-    status = 'PAUSED',
-    special_ad_categories = [], 
-    buying_type = 'AUCTION',
-    bid_strategy,
-    daily_budget,
-    lifetime_budget,
-    spend_cap,
-    promoted_object,
-    is_skadnetwork_attribution = false,
-    optimization_goal, // For AI suggestions
-    destination_type,  // For AI suggestions
-    access_token
-  }) => {
-    const baseUrl = 'https://graph.facebook.com/v22.0';
-    const token = access_token || process.env.FACEBOOK_MARKETING_API_ACCESS_TOKEN;
+  account_id, 
+  name,
+  objective, // Now required, no default value
+  status = 'ACTIVE',
+  special_ad_categories = ['NONE'],
+  buying_type = 'AUCTION',
+  bid_strategy = 'LOWEST_COST_WITHOUT_CAP',
+  daily_budget = 50000,
+  lifetime_budget = null,
+  campaign_budget_optimization = true
+}) => {
+  // Only import and initialize Node-only dependencies at execution time
+  const { createClient } = await import('@supabase/supabase-js');
   
-    // Validation based on official API requirements
-    if (!account_id) {
-      return { success: false, error: 'account_id is required' };
-    }
-    if (!name) {
-      return { success: false, error: 'name is required' };
-    }
-    if (!token) {
-      return { success: false, error: 'Access token is required (env: FACEBOOK_MARKETING_API_ACCESS_TOKEN)' };
-    }
-  
-    // Validate objective (from official docs)
-    const validObjectives = [
-      'APP_INSTALLS', 'BRAND_AWARENESS', 'CONVERSIONS', 'EVENT_RESPONSES', 
-      'LEAD_GENERATION', 'LINK_CLICKS', 'LOCAL_AWARENESS', 'MESSAGES', 
-      'OFFER_CLAIMS', 'OUTCOME_APP_PROMOTION', 'OUTCOME_AWARENESS', 
-      'OUTCOME_ENGAGEMENT', 'OUTCOME_LEADS', 'OUTCOME_SALES', 'OUTCOME_TRAFFIC', 
-      'PAGE_LIKES', 'POST_ENGAGEMENT', 'PRODUCT_CATALOG_SALES', 'REACH', 
-      'STORE_VISITS', 'VIDEO_VIEWS'
-    ];
-    
-    if (!validObjectives.includes(objective)) {
-      return { 
-        success: false, 
-        error: `Invalid objective. Must be one of: ${validObjectives.join(', ')}` 
-      };
-    }
-  
-    // Validate bid_strategy (from official docs)
-    if (bid_strategy) {
-      const validBidStrategies = [
-        'LOWEST_COST_WITHOUT_CAP', 'LOWEST_COST_WITH_BID_CAP', 
-        'COST_CAP', 'LOWEST_COST_WITH_MIN_ROAS'
-      ];
-      if (!validBidStrategies.includes(bid_strategy)) {
-        return { 
-          success: false, 
-          error: `Invalid bid_strategy. Must be one of: ${validBidStrategies.join(', ')}` 
-        };
+  // Create Supabase client only when function executes
+  const supabase = createClient(
+    process.env.SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY,
+    {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
       }
     }
-  
-    // Validate spend_cap minimum ($100 USD from docs)
-    if (spend_cap && spend_cap < 100) {
-      return { 
-        success: false, 
-        error: 'spend_cap must be at least $100.00' 
-      };
+  );
+
+  // Helper function to get user ID from account ID (defined inside executeFunction)
+  const getUserFromAccount = async (supabase, accountId) => {
+    console.log('🔍 Finding user for account ID:', accountId);
+    console.log('🔍 Account ID type:', typeof accountId, 'Value:', JSON.stringify(accountId));
+    
+    if (!accountId) {
+      throw new Error('Account ID is required');
     }
-  
+
     try {
-      const url = `${baseUrl}/act_${account_id}/campaigns`;
-  
-      // Build request body parameters according to official API
-      const params = new URLSearchParams();
-      params.append('name', name);
-      params.append('objective', objective);
-      params.append('status', status);
-      params.append('buying_type', buying_type);
-      params.append('special_ad_categories', JSON.stringify(special_ad_categories));
-      params.append('access_token', token);
-  
-      // Add optional bid strategy (only for campaign budget optimization)
-      if (bid_strategy) {
-        params.append('bid_strategy', bid_strategy);
-      }
-  
-      // Handle budget parameters (convert dollars to cents, minimum $1.00)
-      if (daily_budget) {
-        if (daily_budget < 1.0) {
-          return { success: false, error: 'daily_budget must be at least $1.00' };
-        }
-        params.append('daily_budget', Math.round(parseFloat(daily_budget) * 100).toString());
-      }
+      // Convert to string to ensure type consistency
+      const accountIdStr = String(accountId).trim();
       
-      if (lifetime_budget) {
-        if (lifetime_budget < 1.0) {
-          return { success: false, error: 'lifetime_budget must be at least $1.00' };
-        }
-        params.append('lifetime_budget', Math.round(parseFloat(lifetime_budget) * 100).toString());
-      }
+      console.log('🔧 Searching for account ID (as string):', accountIdStr);
       
-      if (spend_cap) {
-        params.append('spend_cap', Math.round(parseFloat(spend_cap) * 100).toString());
-      }
-  
-      // Add promoted object if provided (required for some objectives)
-      if (promoted_object) {
-        params.append('promoted_object', JSON.stringify(promoted_object));
-      }
-  
-      // Add iOS 14+ SKAdNetwork attribution
-      if (is_skadnetwork_attribution) {
-        params.append('is_skadnetwork_attribution', 'true');
-      }
-  
-      const headers = {
-        'Content-Type': 'application/x-www-form-urlencoded'
-      };
-  
-      const response = await fetch(url, {
-        method: 'POST',
-        headers,
-        body: params
+      // Query without .single() first to see what we get
+      const { data: allData, error: allError, count } = await supabase
+        .from('facebook_ad_accounts')
+        .select('user_id, id, name', { count: 'exact' })
+        .eq('id', accountIdStr);
+
+      console.log('📊 Query results:', { 
+        count, 
+        allData, 
+        allError, 
+        searchedAccountId: accountIdStr 
       });
-  
-      const data = await response.json();
-  
-      if (!response.ok) {
-        console.error('Error creating campaign:', JSON.stringify(data, null, 2));
-        return { 
-          success: false, 
-          error: data,
-          status: response.status,
-          message: data.error?.message || 'Failed to create campaign'
-        };
+
+      if (allError) {
+        console.error('❌ Account lookup error:', allError);
+        throw new Error(`Account lookup failed: ${allError.message}`);
       }
-  
-      return { 
-        success: true, 
-        data,
-        campaign_id: data.id,
-        message: `Campaign "${name}" created successfully with ID: ${data.id}`
-      };
-  
+
+      if (!allData || allData.length === 0) {
+        console.warn('⚠️ No accounts found with ID:', accountIdStr);
+        
+        // Let's also try a broader search to see what accounts exist
+        const { data: sampleData } = await supabase
+          .from('facebook_ad_accounts')
+          .select('id, name')
+          .limit(5);
+        
+        console.log('📋 Sample accounts in database:', sampleData);
+        
+        throw new Error(`Ad account ${accountIdStr} not found in database. Check if the account ID is correct.`);
+      }
+
+      if (allData.length > 1) {
+        console.warn('⚠️ Multiple accounts found with same ID:', allData);
+        console.log('🔧 Using first account from duplicates');
+      }
+
+      const userData = allData[0];
+      
+      if (!userData.user_id) {
+        throw new Error(`Account ${accountIdStr} found but has no associated user_id`);
+      }
+      
+      console.log('✅ Found user ID:', userData.user_id, 'for account:', userData.name);
+      return userData.user_id;
     } catch (error) {
-      console.error('Network error creating campaign:', error);
-      return { 
-        success: false, 
-        error: error.message || 'An error occurred while creating the campaign.',
-        type: 'network_error'
+      console.error('💥 Error in getUserFromAccount:', error);
+      throw error;
+    }
+  };
+
+  // Helper function to get Facebook token (defined inside executeFunction)
+  const getFacebookToken = async (supabase, userId) => {
+    console.log('🔍 Attempting to get Facebook token for userId:', userId);
+    
+    if (!userId) {
+      throw new Error('User ID is required');
+    }
+
+    if (!supabase) {
+      throw new Error('Supabase client is required');
+    }
+
+    try {
+      console.log('📡 Making Supabase query...');
+      const { data, error } = await supabase
+        .from('users')
+        .select('facebook_long_lived_token')
+        .eq('id', userId)
+        .single();
+
+      console.log('📊 Supabase response:', { data, error });
+
+      if (error) {
+        console.error('❌ Supabase error:', error);
+        throw new Error(`Supabase query failed: ${error.message}`);
+      }
+
+      if (!data) {
+        console.warn('⚠️ No user found with ID:', userId);
+        return null;
+      }
+
+      if (!data.facebook_long_lived_token) {
+        console.warn('⚠️ User found but no Facebook token for user ID:', userId);
+        return null;
+      }
+
+      console.log('✅ Facebook token retrieved successfully');
+      return data.facebook_long_lived_token;
+    } catch (error) {
+      console.error('💥 Error in getFacebookToken:', error);
+      throw error;
+    }
+  };
+
+  // Now execute the main function logic
+  const API_VERSION = process.env.FACEBOOK_API_VERSION || 'v23.0';
+  const baseUrl = `https://graph.facebook.com/${API_VERSION}`;
+  
+  // Validate required params
+  if (!account_id) {
+    return { 
+      error: 'Missing required parameter: account_id' 
+    };
+  }
+
+  if (!objective) {
+    return { 
+      error: 'Missing required parameter: objective. Please choose from: OUTCOME_ENGAGEMENT, OUTCOME_LEADS, OUTCOME_SALES, OUTCOME_AWARENESS, OUTCOME_TRAFFIC, OUTCOME_APP_PROMOTION' 
+    };
+  }
+
+  // Validate objective is one of the allowed values
+  const validObjectives = [
+    'OUTCOME_ENGAGEMENT', 
+    'OUTCOME_LEADS', 
+    'OUTCOME_SALES', 
+    'OUTCOME_AWARENESS', 
+    'OUTCOME_TRAFFIC', 
+    'OUTCOME_APP_PROMOTION'
+  ];
+  
+  if (!validObjectives.includes(objective)) {
+    return {
+      error: `Invalid objective: ${objective}. Must be one of: ${validObjectives.join(', ')}`
+    };
+  }
+
+  // Normalize the objective (trim whitespace)
+  const normalizedObjective = objective.trim();
+
+  if (campaign_budget_optimization === true) {
+    const hasLifetime = Number(lifetime_budget) > 0;
+    const hasDaily = Number(daily_budget) > 0;
+  
+    if (!hasLifetime && !hasDaily) {
+      return {
+        error: 'Validation error: When campaign_budget_optimization is true, you must provide either lifetime_budget or daily_budget (> 0).',
+        details: { campaign_budget_optimization, daily_budget, lifetime_budget }
       };
     }
-  };
-  
-  /**
-   * AI-powered parameter suggestion function
-   * Based on official Facebook Marketing API objective mapping table
-   */
-  const suggestCampaignParameters = (userInput) => {
-    const suggestions = {};
-  
-    // Official objective mapping from Facebook docs
-    const objectiveMapping = {
-      // New Outcome-Driven Experiences
-      'OUTCOME_TRAFFIC': {
-        destination_types: {
-          'WEBSITE': { optimization_goals: ['LINK_CLICKS', 'LANDING_PAGE_VIEWS', 'REACH', 'IMPRESSIONS'] },
-          'APP': { optimization_goals: ['LINK_CLICKS', 'REACH', 'IMPRESSIONS'], promoted_object: { application_id: 'REQUIRED', object_store_url: 'REQUIRED' } },
-          'MESSENGER': { optimization_goals: ['LINK_CLICKS', 'REACH', 'IMPRESSIONS'] },
-          'WHATSAPP': { optimization_goals: ['LINK_CLICKS', 'REACH', 'IMPRESSIONS'], promoted_object: { page_id: 'REQUIRED' } },
-          'PHONE_CALL': { optimization_goals: ['QUALITY_CALL', 'LINK_CLICKS'] }
-        }
-      },
-      
-      'OUTCOME_SALES': {
-        destination_types: {
-          'WEBSITE': { optimization_goals: ['OFFSITE_CONVERSIONS', 'LINK_CLICKS', 'REACH', 'LANDING_PAGE_VIEWS', 'IMPRESSIONS'], promoted_object: { pixel_id: 'REQUIRED', custom_event_type: 'REQUIRED' } },
-          'APP': { optimization_goals: ['OFFSITE_CONVERSIONS', 'LINK_CLICKS', 'REACH'], promoted_object: { application_id: 'REQUIRED', object_store_url: 'REQUIRED' } },
-          'MESSENGER': { optimization_goals: ['CONVERSATIONS'], promoted_object: { page_id: 'REQUIRED', pixel_id: 'REQUIRED', custom_event_type: 'REQUIRED' } },
-          'PHONE_CALL': { optimization_goals: ['QUALITY_CALL'], promoted_object: { page_id: 'REQUIRED' } }
-        }
-      },
-      
-      'OUTCOME_LEADS': {
-        destination_types: {
-          'WEBSITE': { optimization_goals: ['OFFSITE_CONVERSIONS', 'LINK_CLICKS', 'REACH', 'LANDING_PAGE_VIEWS', 'IMPRESSIONS'], promoted_object: { pixel_id: 'REQUIRED', custom_event_type: 'REQUIRED' } },
-          'APP': { optimization_goals: ['OFFSITE_CONVERSIONS', 'LINK_CLICKS', 'REACH'], promoted_object: { application_id: 'REQUIRED', object_store_url: 'REQUIRED' } },
-          'ON_AD': { optimization_goals: ['LEAD_GENERATION', 'QUALITY_LEAD'], promoted_object: { page_id: 'REQUIRED' } },
-          'MESSENGER': { optimization_goals: ['LEAD_GENERATION'], promoted_object: { page_id: 'REQUIRED' } },
-          'INSTAGRAM_DIRECT': { optimization_goals: ['LEAD_GENERATION'], promoted_object: { page_id: 'REQUIRED' } },
-          'PHONE_CALL': { optimization_goals: ['QUALITY_CALL'], promoted_object: { page_id: 'REQUIRED' } }
-        }
-      },
-      
-      'OUTCOME_ENGAGEMENT': {
-        destination_types: {
-          'WEBSITE': { optimization_goals: ['OFFSITE_CONVERSIONS', 'LINK_CLICKS', 'REACH', 'IMPRESSIONS'], promoted_object: { pixel_id: 'REQUIRED', custom_event_type: 'REQUIRED' } },
-          'APP': { optimization_goals: ['OFFSITE_CONVERSIONS', 'LINK_CLICKS', 'REACH'], promoted_object: { application_id: 'REQUIRED', object_store_url: 'REQUIRED' } },
-          'ON_POST': { optimization_goals: ['POST_ENGAGEMENT', 'REACH', 'IMPRESSIONS'] },
-          'ON_PAGE': { optimization_goals: ['PAGE_LIKES'], promoted_object: { page_id: 'REQUIRED' } },
-          'ON_EVENT': { optimization_goals: ['EVENT_RESPONSES', 'POST_ENGAGEMENT', 'REACH', 'IMPRESSIONS'] },
-          'ON_VIDEO': { optimization_goals: ['THRUPLAY', 'TWO_SECOND_CONTINUOUS_VIDEO_VIEWS'] },
-          'MESSENGER': { optimization_goals: ['CONVERSATIONS', 'LINK_CLICKS'], promoted_object: { page_id: 'REQUIRED' } }
-        }
-      },
-      
-      'OUTCOME_AWARENESS': {
-        destination_types: {
-          'BRAND': { optimization_goals: ['AD_RECALL_LIFT', 'REACH', 'IMPRESSIONS'], promoted_object: { page_id: 'REQUIRED' } },
-          'VIDEO': { optimization_goals: ['THRUPLAY', 'TWO_SECOND_CONTINUOUS_VIDEO_VIEWS'], promoted_object: { page_id: 'REQUIRED' } },
-          'STORE_VISITS': { optimization_goals: ['REACH'], promoted_object: { place_page_set_id: 'REQUIRED' } }
-        }
-      },
-  
-      'OUTCOME_APP_PROMOTION': {
-        destination_types: {
-          'APP_INSTALLS': { optimization_goals: ['LINK_CLICKS', 'OFFSITE_CONVERSIONS', 'APP_INSTALLS'], promoted_object: { application_id: 'REQUIRED', object_store_url: 'REQUIRED' } }
-        }
-      },
-  
-      // Legacy objectives (still supported)
-      'CONVERSIONS': {
-        destination_types: {
-          'WEBSITE': { optimization_goals: ['OFFSITE_CONVERSIONS'], promoted_object: { pixel_id: 'REQUIRED', custom_event_type: 'REQUIRED' } }
-        }
-      },
-      
-      'MESSAGES': {
-        destination_types: {
-          'MESSENGER': { optimization_goals: ['CONVERSATIONS'], promoted_object: { page_id: 'REQUIRED' } }
-        }
-      }
-    };
-  
-    // If user specifies optimization goal and destination type, suggest matching objective
-    if (userInput.optimization_goal && userInput.destination_type) {
-      for (const [objective, config] of Object.entries(objectiveMapping)) {
-        const destConfig = config.destination_types[userInput.destination_type];
-        if (destConfig && destConfig.optimization_goals.includes(userInput.optimization_goal)) {
-          suggestions.objective = objective;
-          if (destConfig.promoted_object) {
-            suggestions.promoted_object = destConfig.promoted_object;
-          }
-          break;
-        }
-      }
+  }
+
+  // Debug input parameters
+  console.log('📥 Input parameters received:', {
+    account_id,
+    objective: normalizedObjective,
+    special_ad_categories: {
+      value: special_ad_categories,
+      type: typeof special_ad_categories,
+      isArray: Array.isArray(special_ad_categories),
+      length: Array.isArray(special_ad_categories) ? special_ad_categories.length : 'N/A'
     }
-    // If user specifies objective, suggest compatible optimization goals and promoted objects
-    else if (userInput.objective && objectiveMapping[userInput.objective]) {
-      const objConfig = objectiveMapping[userInput.objective];
-      const firstDestType = Object.keys(objConfig.destination_types)[0];
-      const firstDestConfig = objConfig.destination_types[firstDestType];
-      
-      suggestions.optimization_goal = firstDestConfig.optimization_goals[0]; // Suggest first option
-      suggestions.destination_type = firstDestType;
-      
-      if (firstDestConfig.promoted_object) {
-        suggestions.promoted_object = firstDestConfig.promoted_object;
-      }
-    }
-  
-    // Handle specific case: optimization = CONVERSATIONS, destination = MESSENGER
-    if (userInput.optimization_goal === 'CONVERSATIONS' && userInput.destination_type === 'MESSENGER') {
-      suggestions.objective = 'OUTCOME_SALES'; // or OUTCOME_ENGAGEMENT
-      suggestions.promoted_object = { page_id: 'REQUIRED - Replace with your page ID' };
-    }
-  
-    // Budget-based bid strategy suggestions
-    if (userInput.daily_budget || userInput.lifetime_budget) {
-      const budget = userInput.daily_budget || (userInput.lifetime_budget / 30);
-      if (budget >= 50) {
-        suggestions.bid_strategy = 'LOWEST_COST_WITH_BID_CAP';
-      } else {
-        suggestions.bid_strategy = 'LOWEST_COST_WITHOUT_CAP';
-      }
-    }
-  
-    // Smart campaign naming
-    if (!userInput.name) {
-      const objective = userInput.objective || suggestions.objective || 'TRAFFIC';
-      const destination = userInput.destination_type || suggestions.destination_type || '';
-      const date = new Date().toISOString().split('T')[0];
-      suggestions.name = `${objective.replace('OUTCOME_', '')}${destination ? ` ${destination}` : ''} Campaign - ${date}`;
-    }
-  
-    // Special ad categories compliance
-    if (!userInput.special_ad_categories || userInput.special_ad_categories.length === 0) {
-      const campaignText = (userInput.name || suggestions.name || '').toLowerCase();
-      const specialCategories = [];
-      
-      if (campaignText.includes('credit') || campaignText.includes('loan') || campaignText.includes('financial')) {
-        specialCategories.push('CREDIT');
-      }
-      if (campaignText.includes('job') || campaignText.includes('employment') || campaignText.includes('hiring')) {
-        specialCategories.push('EMPLOYMENT');
-      }
-      if (campaignText.includes('housing') || campaignText.includes('real estate') || campaignText.includes('rent')) {
-        specialCategories.push('HOUSING');
-      }
-      if (campaignText.includes('election') || campaignText.includes('political') || campaignText.includes('voting')) {
-        specialCategories.push('ISSUES_ELECTIONS_POLITICS');
-      }
-      
-      suggestions.special_ad_categories = specialCategories.length > 0 ? specialCategories : [];
-    }
-  
-    // iOS attribution for app campaigns
-    if (suggestions.objective === 'OUTCOME_APP_PROMOTION' || userInput.objective === 'APP_INSTALLS') {
-      suggestions.is_skadnetwork_attribution = true;
-    }
-  
-    return suggestions;
-  };
-  
-  /**
-   * Enhanced campaign creation with AI suggestions
-   */
-  const createCampaignWithAI = async (userParams = {}, options = {}) => {
-    // Get AI suggestions
-    const aiSuggestions = suggestCampaignParameters(userParams);
+  });
+
+  try {
+    console.log('🔍 Processing campaign creation for account:', account_id);
+
+    // Step 1: Find the user who owns this ad account
+    const userId = await getUserFromAccount(supabase, account_id);
     
-    // Merge parameters: AI suggestions + user params (user takes priority)
-    const finalParams = { ...aiSuggestions, ...userParams };
-  
-    if (options.showAISuggestions) {
+    // Step 2: Get Facebook token for that user
+    const token = await getFacebookToken(supabase, userId);
+    
+    if (!token) {
+      return { 
+        error: 'No Facebook access token found for the user who owns this ad account',
+        details: `Account ${account_id} belongs to user ${userId} but they have no Facebook token`
+      };
     }
-  
-    return executeFunction(finalParams);
-  };
-  
-  /**
-   * Tool configuration for creating a campaign using the Facebook Marketing API.
-   * @type {Object}
-   */
-  const apiTool = {
-    function: executeFunction,
-    enhancedFunction: createCampaignWithAI,
-    suggestParameters: suggestCampaignParameters,
-    definition: {
-      type: 'function',
-      function: {
-        name: 'create_campaign',
-        description: 'Create a campaign using the Facebook Marketing API v23.0 with intelligent defaults and best practices.',
-        parameters: {
-          type: 'object',
-          properties: {
-            account_id: {
-              type: 'string',
-              description: 'The ID of the ad account to create the campaign under (format: without act_ prefix).'
-            },
-            name: {
-              type: 'string',
-              description: 'The name of the campaign.'
-            },
-            objective: {
-              type: 'string',
-              description: 'The objective of the campaign.',
-              enum: ['OUTCOME_TRAFFIC', 'OUTCOME_SALES', 'OUTCOME_LEADS', 'OUTCOME_ENGAGEMENT', 'OUTCOME_AWARENESS',],
-              default: 'OUTCOME_TRAFFIC'
-            },
-            status: {
-              type: 'string',
-              description: 'The status of the campaign.',
-              enum: ['ACTIVE', 'PAUSED', 'DELETED', 'ARCHIVED'],
-              default: 'PAUSED'
-            },
-            special_ad_categories: {
-              type: 'array',
-              description: 'Special ad categories for compliance.',
-              items: {
-                type: 'string',
-                enum: ['CREDIT', 'EMPLOYMENT', 'HOUSING', 'NONE']
-              },
-              default: []
-            },
-            buying_type: {
-              type: 'string',
-              description: 'The buying type for the campaign.',
-              enum: ['AUCTION', 'RESERVED'],
-              default: 'AUCTION'
-            },
-            bid_strategy: {
-              type: 'string',
-              description: 'The bid strategy for the campaign.',
-              enum: ['LOWEST_COST_WITHOUT_CAP', 'LOWEST_COST_WITH_BID_CAP', 'TARGET_COST', 'COST_CAP'],
-              default: 'LOWEST_COST_WITHOUT_CAP'
-            },
-            daily_budget: {
-              type: 'number',
-              description: 'Daily budget in dollars (will be converted to cents automatically).'
-            },
-            lifetime_budget: {
-              type: 'number',
-              description: 'Lifetime budget in dollars (will be converted to cents automatically).'
-            },
-            spend_cap: {
-              type: 'number',
-              description: 'Spending limit in dollars (will be converted to cents automatically).'
-            },
-            promoted_object: {
-              type: 'object',
-              description: 'Object being promoted (page_id, pixel_id, etc.).',
-              properties: {
-                page_id: { type: 'string' },
-                pixel_id: { type: 'string' },
-                application_id: { type: 'string' }
-              }
-            },
-            campaign_budget_optimization: {
-              type: 'boolean',
-              description: 'Enable campaign budget optimization.',
-              default: false
-            },
-            access_token: {
-              type: 'string',
-              description: 'Override access token (uses FACEBOOK_MARKETING_API_ACCESS_TOKEN env var if not provided).'
-            }
-          },
-          required: ['account_id', 'name']
-        }
+
+    // Generate campaign name with timestamp if not provided
+    const campaignName = name || `Campaign ${normalizedObjective} ${new Date().toISOString()}`;
+    
+    // Calculate stop_time (7 days from now)
+    const stopTime = new Date();
+    stopTime.setDate(stopTime.getDate() + 7);
+
+    const url = `${baseUrl}/act_${account_id}/campaigns`;
+    
+    // Log the parameters for debugging
+    console.log('📋 Campaign parameters before processing:', {
+      objective: normalizedObjective,
+      special_ad_categories,
+      type: typeof special_ad_categories,
+      isArray: Array.isArray(special_ad_categories)
+    });
+
+    const campaignParams = {
+      name: campaignName,
+      objective: normalizedObjective, // Now uses the properly validated and normalized objective
+      status,
+      buying_type,
+      stop_time: stopTime.toISOString(),
+      access_token: token
+    };
+
+    // Handle special_ad_categories - try different approaches based on client behavior
+    const specialAdCategoriesForApi =
+    Array.isArray(special_ad_categories) && special_ad_categories.length > 0
+      ? JSON.stringify(special_ad_categories)
+      : JSON.stringify(['NONE']);
+  campaignParams.special_ad_categories = specialAdCategoriesForApi;
+
+    // Campaign Budget Optimization (CBO) Logic
+    if (campaign_budget_optimization) {
+      campaignParams.bid_strategy = bid_strategy;
+      if (lifetime_budget && Number(lifetime_budget) > 0) {
+        campaignParams.lifetime_budget = String(lifetime_budget);
+      } else if (daily_budget && Number(daily_budget) > 0) {
+        campaignParams.daily_budget = String(daily_budget);
+      }
+    } else {
+      // CBO disabled: No budget at campaign level (budgets will be set at ad set level)
+      console.log('📊 Campaign Budget Optimization disabled - budgets will be set at ad set level');
+      console.log('⚠️ Note: You must set budgets when creating ad sets for this campaign');
+    }
+
+    // Remove null/empty values
+    for (const [k, v] of Object.entries(campaignParams)) {
+      if (v == null || (typeof v === 'string' && v.trim() === '')) {
+        delete campaignParams[k];
       }
     }
-  };
-  
-  export { apiTool };
+
+    const body = new URLSearchParams(campaignParams);
+
+    console.log('🚀 Making Facebook API request to:', url);
+    console.log('📋 Final campaign params being sent:', Object.fromEntries(body.entries()));
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: body.toString()
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error('❌ Facebook API error:', errorData);
+      return { 
+        error: `Campaign creation failed: ${errorData.error?.message || 'Unknown error'}`,
+        details: errorData 
+      };
+    }
+
+    const result = await response.json();
+    console.log('✅ Campaign created successfully:', result);
+    
+    return {
+      success: true,
+      campaign: result,
+      account_id,
+      objective_used: normalizedObjective,
+      budget_optimization: {
+        cbo_enabled: campaign_budget_optimization,
+        budget_level: campaign_budget_optimization ? 'campaign' : 'ad_set',
+        budget_type: lifetime_budget && campaign_budget_optimization ? 'lifetime' : 'daily',
+        budget_amount: campaign_budget_optimization ? (lifetime_budget || daily_budget) : null
+      },
+    };
+  } catch (error) {
+    console.error('💥 Error in executeFunction:', error);
+    return { 
+      error: 'An error occurred while creating the campaign.',
+      details: error.message 
+    };
+  }
+};
+
+/**
+ * Tool configuration for creating Facebook engagement campaigns
+ * Definition is kept pure with no Node-only dependencies
+ */
+const apiTool = {
+  function: executeFunction,
+  definition: {
+    type: 'function',
+    function: {
+      name: 'create-campaign',
+      description: 'Create a Facebook campaign with the specified objective. Choose the appropriate objective based on your campaign goals.',
+      parameters: {
+        type: 'object',
+        properties: {
+          account_id: {
+            type: 'string',
+            description: 'Facebook ad account ID (without act_ prefix) - automatically provided from MCP context'
+          },
+          objective: {
+            type: 'string',
+            enum: [
+              'OUTCOME_ENGAGEMENT', 
+              'OUTCOME_LEADS', 
+              'OUTCOME_SALES', 
+              'OUTCOME_AWARENESS', 
+              'OUTCOME_TRAFFIC', 
+              'OUTCOME_APP_PROMOTION'
+            ],
+            description: 'REQUIRED: Campaign objective. OUTCOME_ENGAGEMENT for messages/conversations, OUTCOME_LEADS for lead generation, OUTCOME_SALES for conversions, OUTCOME_AWARENESS for brand awareness, OUTCOME_TRAFFIC for website visits, OUTCOME_APP_PROMOTION for app installs/engagement'
+          },
+          name: {
+            type: 'string',
+            description: 'Campaign name (defaults to "Campaign {objective} {timestamp}")'
+          },
+          status: {
+            type: 'string',
+            enum: ['ACTIVE', 'PAUSED'],
+            description: 'Campaign status (default: ACTIVE)'
+          },
+          special_ad_categories: {
+            type: 'array',
+            items: {
+              type: 'string',
+              enum: ['NONE', 'EMPLOYMENT', 'HOUSING', 'CREDIT', 'ISSUES_ELECTIONS_POLITICS', 'ONLINE_GAMBLING_AND_GAMING', 'FINANCIAL_PRODUCTS_SERVICES']
+            },
+            description: 'Special ad categories (default: ["NONE"])'
+          },
+          buying_type: {
+            type: 'string',
+            enum: ['AUCTION', 'RESERVED'],
+            description: 'Buying type (default: AUCTION)'
+          },
+          bid_strategy: {
+            type: 'string',
+            enum: ['LOWEST_COST_WITHOUT_CAP', 'LOWEST_COST_WITH_BID_CAP', 'COST_CAP', 'LOWEST_COST_WITH_MIN_ROAS'],
+            description: 'Bid strategy (default: LOWEST_COST_WITHOUT_CAP)'
+          },
+          daily_budget: {
+            type: 'integer',
+            description: 'Daily budget in cents (ex. 50000 cents = 500.00). Used when campaign_budget_optimization is true and no lifetime_budget is set.'
+          },
+          lifetime_budget: {
+            type: 'integer',
+            description: 'Lifetime budget in cents. If set and campaign_budget_optimization is true, this overrides daily_budget.'
+          },
+          campaign_budget_optimization: {
+            type: 'boolean',
+            description: 'Enable Campaign Budget Optimization (CBO). When true, budget is set at campaign level and Facebook optimizes distribution across ad sets. When false, budgets must be set at ad set level. (default: true)'
+          }
+        },
+        required: ['account_id', 'objective']
+      }
+    }
+  }
+};
+
+export { apiTool };
