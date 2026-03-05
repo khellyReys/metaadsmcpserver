@@ -84,6 +84,12 @@ async function setupServerHandlers(server, tools) {
     if (!tool) {
       throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
     }
+    if (typeof tool.function !== "function") {
+      throw new McpError(
+        ErrorCode.InternalError,
+        `Tool "${name}" has no executable function (missing .function).`
+      );
+    }
 
     const args = request.params.arguments ?? {};
     const required = tool.definition?.function?.parameters?.required || [];
