@@ -574,16 +574,18 @@ async function run() {
     const port = process.env.PORT || 3001;
     const host = process.env.HOST || "0.0.0.0";
 
-    // Use HTTPS locally if cert files exist, plain HTTP otherwise (e.g. on Render)
+    // Use HTTPS only for local dev with cert files; force plain HTTP on Render/production.
     const __filename2 = fileURLToPath(import.meta.url);
     const __dirname2 = path.dirname(__filename2);
     const keyPath = path.join(__dirname2, 'localhost-key.pem');
     const certPath = path.join(__dirname2, 'localhost-cert.pem');
-    const hasCerts = fs.existsSync(keyPath) && fs.existsSync(certPath);
-    const netServer = hasCerts
+    const isHosted = process.env.NODE_ENV === 'production' || process.env.RENDER === 'true';
+    const hasLocalCerts = fs.existsSync(keyPath) && fs.existsSync(certPath);
+    const useHttps = !isHosted && hasLocalCerts;
+    const netServer = useHttps
       ? https.createServer({ key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) }, app)
       : http.createServer(app);
-    const protocol = hasCerts ? 'https' : 'http';
+    const protocol = useHttps ? 'https' : 'http';
 
     netServer.on('error', (err) => {
       console.error(`[server error] ${err.message}`);
