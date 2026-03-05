@@ -572,6 +572,7 @@ async function run() {
     });
 
     const port = process.env.PORT || 3001;
+    const host = process.env.HOST || "0.0.0.0";
 
     // Use HTTPS locally if cert files exist, plain HTTP otherwise (e.g. on Render)
     const __filename2 = fileURLToPath(import.meta.url);
@@ -592,11 +593,11 @@ async function run() {
       process.exit(1);
     });
 
-    netServer.listen(port, () => {
-      console.log(`MCP server listening on ${protocol}://localhost:${port}`);
-      console.log(`Health:          ${protocol}://localhost:${port}/health`);
-      console.log(`SSE (legacy):    ${protocol}://localhost:${port}/api/sse`);
-      console.log(`Streamable HTTP: ${protocol}://localhost:${port}/api/mcp`);
+    netServer.listen(port, host, () => {
+      console.log(`MCP server listening on ${protocol}://${host}:${port}`);
+      console.log(`Health:          ${protocol}://${host}:${port}/health`);
+      console.log(`SSE (legacy):    ${protocol}://${host}:${port}/api/sse`);
+      console.log(`Streamable HTTP: ${protocol}://${host}:${port}/api/mcp`);
       console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
       console.log(`Static files: ${distPath}`);
       // keepalive stays active — the server socket keeps the event loop alive,
