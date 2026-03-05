@@ -2,38 +2,35 @@
  * Function to get campaign details from the Facebook Marketing API.
  *
  * @param {Object} args - Arguments for the campaign retrieval.
- * @param {string} args.campaing_id_existing_ad - The ID of the existing campaign to retrieve.
- * @param {string} args.token - The access token for authorization.
+ * @param {string} args.userId - The user ID (Supabase auth) to retrieve the Facebook token.
+ * @param {string} args.campaign_id - The ID of the campaign to retrieve.
  * @returns {Promise<Object>} - The details of the campaign.
  */
-const executeFunction = async ({ campaing_id_existing_ad }) => {
-  const baseUrl = ''; // will be provided by the user
-  const token = process.env.FACEBOOK_MARKETING_API_API_KEY;
+import { getSupabaseClient, getTokenForUser } from './_token-utils.js';
+import { getBaseUrl, safeFacebookError } from './_shared-helpers.js';
+
+const executeFunction = async ({ userId, campaign_id }) => {
+  const base = getBaseUrl();
+  const supabase = getSupabaseClient();
+  const token = await getTokenForUser(supabase, userId);
+  if (!token) return { error: 'No Facebook access token found for this user' };
   try {
-    // Construct the URL with query parameters
-    const url = new URL(`${baseUrl}/`);
-    url.searchParams.append('ids', campaing_id_existing_ad);
+    const url = new URL(`${base}/`);
+    url.searchParams.append('ids', campaign_id);
     url.searchParams.append('fields', 'id,account_id,objective,name,configured_status,effective_status,buying_type,created_time,updated_time,spend_cap,can_use_spend_cap,issues_info,special_ad_categories');
 
-    // Set up headers for the request
     const headers = {
       'Authorization': `Bearer ${token}`
     };
 
-    // Perform the fetch request
-    const response = await fetch(url.toString(), {
-      method: 'GET',
-      headers
-    });
+    const response = await fetch(url.toString(), { method: 'GET', headers });
 
-    // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
       console.error('Error retrieving campaign details:', JSON.stringify(errorData));
-      throw new Error(errorData);
+      throw new Error(safeFacebookError(errorData));
     }
 
-    // Parse and return the response data
     const data = await response.json();
     return data;
   } catch (error) {
@@ -42,26 +39,26 @@ const executeFunction = async ({ campaing_id_existing_ad }) => {
   }
 };
 
-/**
- * Tool configuration for getting campaign details from the Facebook Marketing API.
- * @type {Object}
- */
 const apiTool = {
   function: executeFunction,
   definition: {
     type: 'function',
     function: {
-      name: 'GetCampaignWithFields',
+      name: 'get_campaign_with_fields',
       description: 'Get details of a specific campaign from the Facebook Marketing API.',
       parameters: {
         type: 'object',
         properties: {
-          campaing_id_existing_ad: {
+          userId: {
             type: 'string',
-            description: 'The ID of the existing campaign to retrieve.'
+            description: 'The user ID (Supabase auth) to retrieve the Facebook token.'
+          },
+          campaign_id: {
+            type: 'string',
+            description: 'The ID of the campaign to retrieve.'
           }
         },
-        required: ['campaing_id_existing_ad']
+        required: ['userId', 'campaign_id']
       }
     }
   }

@@ -3,14 +3,14 @@ import { Code, Terminal, Wifi } from 'lucide-react';
 
 const APISection = () => {
   return (
-    <section id="api" className="py-20 bg-gradient-to-br from-gray-50 to-blue-50">
+    <section id="api" className="py-20 bg-gradient-to-br from-gray-50 to-blue-50 dark:from-gray-800 dark:to-gray-900">
       <div className="container mx-auto px-4 sm:px-6 lg:px-8">
         <div className="text-center mb-16">
-          <h2 className="text-3xl md:text-4xl font-bold text-gray-900 mb-4">
+          <h2 className="text-3xl md:text-4xl font-bold text-gray-900 dark:text-gray-100 mb-4">
             Developer-First
             <span className="bg-gradient-to-r from-blue-600 to-teal-600 bg-clip-text text-transparent"> API Design</span>
           </h2>
-          <p className="text-xl text-gray-600 max-w-2xl mx-auto">
+          <p className="text-xl text-gray-600 dark:text-gray-300 max-w-2xl mx-auto">
             RESTful API with real-time streaming capabilities built for modern development workflows.
           </p>
         </div>
@@ -19,32 +19,32 @@ const APISection = () => {
           <div>
             <div className="space-y-8">
               <div className="flex items-start space-x-4">
-                <div className="w-10 h-10 bg-blue-50 rounded-lg flex items-center justify-center">
-                  <Code className="w-5 h-5 text-blue-600" />
+                <div className="w-10 h-10 bg-blue-50 dark:bg-blue-900/30 rounded-lg flex items-center justify-center">
+                  <Code className="w-5 h-5 text-blue-600 dark:text-blue-400" />
                 </div>
                 <div>
-                  <h3 className="text-xl font-semibold text-gray-900 mb-2">RESTful Endpoints</h3>
-                  <p className="text-gray-600">Clean, intuitive API design following REST principles with comprehensive OpenAPI documentation.</p>
+                  <h3 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-2">RESTful Endpoints</h3>
+                  <p className="text-gray-600 dark:text-gray-400">Clean, intuitive API design following REST principles with comprehensive OpenAPI documentation.</p>
                 </div>
               </div>
 
               <div className="flex items-start space-x-4">
-                <div className="w-10 h-10 bg-green-50 rounded-lg flex items-center justify-center">
-                  <Wifi className="w-5 h-5 text-green-600" />
+                <div className="w-10 h-10 bg-green-50 dark:bg-green-900/30 rounded-lg flex items-center justify-center">
+                  <Wifi className="w-5 h-5 text-green-600 dark:text-green-400" />
                 </div>
                 <div>
-                  <h3 className="text-xl font-semibold text-gray-900 mb-2">Server-Sent Events</h3>
-                  <p className="text-gray-600">Real-time data streaming for live ad performance updates and instant notifications.</p>
+                  <h3 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-2">Server-Sent Events</h3>
+                  <p className="text-gray-600 dark:text-gray-400">Real-time data streaming for live ad performance updates and instant notifications.</p>
                 </div>
               </div>
 
               <div className="flex items-start space-x-4">
-                <div className="w-10 h-10 bg-purple-50 rounded-lg flex items-center justify-center">
-                  <Terminal className="w-5 h-5 text-purple-600" />
+                <div className="w-10 h-10 bg-purple-50 dark:bg-purple-900/30 rounded-lg flex items-center justify-center">
+                  <Terminal className="w-5 h-5 text-purple-600 dark:text-purple-400" />
                 </div>
                 <div>
-                  <h3 className="text-xl font-semibold text-gray-900 mb-2">MCP Protocol</h3>
-                  <p className="text-gray-600">Standard Model Context Protocol implementation for seamless AI model integration.</p>
+                  <h3 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-2">MCP Protocol</h3>
+                  <p className="text-gray-600 dark:text-gray-400">Standard Model Context Protocol implementation for seamless AI model integration.</p>
                 </div>
               </div>
             </div>
@@ -56,7 +56,7 @@ const APISection = () => {
             </div>
           </div>
 
-          <div className="bg-gray-900 rounded-2xl p-6 overflow-x-auto">
+          <div className="bg-gray-900 dark:bg-gray-950 rounded-2xl p-6 overflow-x-auto border border-gray-800 dark:border-gray-700">
             <div className="flex items-center space-x-2 mb-4">
               <div className="w-3 h-3 bg-red-500 rounded-full"></div>
               <div className="w-3 h-3 bg-yellow-500 rounded-full"></div>

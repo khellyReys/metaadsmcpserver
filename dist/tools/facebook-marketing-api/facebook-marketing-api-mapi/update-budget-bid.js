@@ -1,86 +1,75 @@
 /**
- * Function to update the budget and bid strategy for a Facebook campaign.
- *
- * @param {Object} args - Arguments for updating the budget and bid.
- * @param {string} args.campaign_id_traffic_bid - The ID of the campaign to update.
- * @param {number} args.lifetime_budget - The lifetime budget for the campaign.
- * @param {string} args.bid_strategy - The bid strategy to use (e.g., "COST_CAP").
- * @param {string} [args.stop_time] - The time to stop the campaign (optional).
- * @returns {Promise<Object>} - The result of the update operation.
+ * Update the budget and bid strategy for a Facebook campaign.
  */
-const executeFunction = async ({ campaign_id_traffic_bid, lifetime_budget, bid_strategy, stop_time }) => {
-  const baseUrl = ''; // will be provided by the user
-  const token = process.env.FACEBOOK_MARKETING_API_API_KEY;
+import { getSupabaseClient, getTokenForUser } from './_token-utils.js';
+import { getBaseUrl, safeFacebookError } from './_shared-helpers.js';
+
+const executeFunction = async ({ userId, campaign_id, daily_budget, lifetime_budget, bid_strategy, stop_time }) => {
+  const supabase = getSupabaseClient();
+  const token = await getTokenForUser(supabase, userId);
+  if (!token) return { error: 'No Facebook access token found for this user' };
 
   try {
-    // Construct the URL with query parameters
-    const url = new URL(`${baseUrl}/${campaign_id_traffic_bid}`);
-    url.searchParams.append('lifetime_budget', lifetime_budget.toString());
-    url.searchParams.append('bid_strategy', bid_strategy);
-    if (stop_time) {
-      url.searchParams.append('stop_time', stop_time);
-    }
+    const url = new URL(`${getBaseUrl()}/${campaign_id}`);
+    if (daily_budget != null) url.searchParams.append('daily_budget', String(daily_budget));
+    if (lifetime_budget != null) url.searchParams.append('lifetime_budget', String(lifetime_budget));
+    if (bid_strategy) url.searchParams.append('bid_strategy', bid_strategy);
+    if (stop_time) url.searchParams.append('stop_time', stop_time);
 
-    // Set up headers for the request
-    const headers = {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    };
-
-    // Perform the fetch request
     const response = await fetch(url.toString(), {
       method: 'POST',
-      headers
+      headers: { 'Authorization': `Bearer ${token}` }
     });
 
-    // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
-      console.error('Error updating budget and bid:', JSON.stringify(errorData));
-      throw new Error(errorData);
+      throw new Error(safeFacebookError(errorData));
     }
 
-    // Parse and return the response data
-    const data = await response.json();
-    return data;
+    return await response.json();
   } catch (error) {
-    console.error('Error updating budget and bid:', error);
-    return { error: 'An error occurred while updating the budget and bid.' };
+    console.error('Error updating budget/bid:', error);
+    return { error: 'An error occurred while updating the budget and bid.', details: error.message };
   }
 };
 
-/**
- * Tool configuration for updating budget and bid strategy for a Facebook campaign.
- * @type {Object}
- */
 const apiTool = {
   function: executeFunction,
   definition: {
     type: 'function',
     function: {
-      name: 'UpdateBudgetBid',
+      name: 'update_budget_bid',
       description: 'Update the budget and bid strategy for a Facebook campaign.',
       parameters: {
         type: 'object',
         properties: {
-          campaign_id_traffic_bid: {
+          userId: {
+            type: 'string',
+            description: 'The user ID (Supabase auth) to retrieve the Facebook token.'
+          },
+          campaign_id: {
             type: 'string',
             description: 'The ID of the campaign to update.'
           },
+          daily_budget: {
+            type: 'number',
+            description: 'Daily budget in cents (e.g. 50000 = 500.00). Cannot be used with lifetime_budget.'
+          },
           lifetime_budget: {
             type: 'number',
-            description: 'The lifetime budget for the campaign.'
+            description: 'Lifetime budget in cents. Cannot be used with daily_budget.'
           },
           bid_strategy: {
             type: 'string',
-            description: 'The bid strategy to use (e.g., "COST_CAP").'
+            enum: ['LOWEST_COST_WITHOUT_CAP', 'LOWEST_COST_WITH_BID_CAP', 'COST_CAP', 'LOWEST_COST_WITH_MIN_ROAS'],
+            description: 'The bid strategy to use.'
           },
           stop_time: {
             type: 'string',
-            description: 'The time to stop the campaign (optional).'
+            description: 'The end time for the campaign (ISO 8601 format).'
           }
         },
-        required: ['campaign_id_traffic_bid', 'lifetime_budget', 'bid_strategy']
+        required: ['userId', 'campaign_id']
       }
     }
   }

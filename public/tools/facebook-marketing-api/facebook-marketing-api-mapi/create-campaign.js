@@ -1,6 +1,7 @@
 /**
  * MCP Tool for creating Facebook campaigns for engagement/conversations
  */
+import { getBaseUrl, normalizeAccountId, resolveToken, clean } from './_shared-helpers.js';
 
 /**
  * Create a Facebook campaign for driving conversations/engagement
@@ -8,7 +9,7 @@
 const executeFunction = async ({ 
   account_id, 
   name,
-  objective, // Now required, no default value
+  objective,
   status = 'ACTIVE',
   special_ad_categories = ['NONE'],
   buying_type = 'AUCTION',
@@ -17,136 +18,8 @@ const executeFunction = async ({
   lifetime_budget = null,
   campaign_budget_optimization = true
 }) => {
-  // Only import and initialize Node-only dependencies at execution time
-  const { createClient } = await import('@supabase/supabase-js');
-  
-  // Create Supabase client only when function executes
-  const supabase = createClient(
-    process.env.SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY,
-    {
-      auth: {
-        autoRefreshToken: false,
-        persistSession: false
-      }
-    }
-  );
+  const baseUrl = getBaseUrl();
 
-  // Helper function to get user ID from account ID (defined inside executeFunction)
-  const getUserFromAccount = async (supabase, accountId) => {
-    console.log('🔍 Finding user for account ID:', accountId);
-    console.log('🔍 Account ID type:', typeof accountId, 'Value:', JSON.stringify(accountId));
-    
-    if (!accountId) {
-      throw new Error('Account ID is required');
-    }
-
-    try {
-      // Convert to string to ensure type consistency
-      const accountIdStr = String(accountId).trim();
-      
-      console.log('🔧 Searching for account ID (as string):', accountIdStr);
-      
-      // Query without .single() first to see what we get
-      const { data: allData, error: allError, count } = await supabase
-        .from('facebook_ad_accounts')
-        .select('user_id, id, name', { count: 'exact' })
-        .eq('id', accountIdStr);
-
-      console.log('📊 Query results:', { 
-        count, 
-        allData, 
-        allError, 
-        searchedAccountId: accountIdStr 
-      });
-
-      if (allError) {
-        console.error('❌ Account lookup error:', allError);
-        throw new Error(`Account lookup failed: ${allError.message}`);
-      }
-
-      if (!allData || allData.length === 0) {
-        console.warn('⚠️ No accounts found with ID:', accountIdStr);
-        
-        // Let's also try a broader search to see what accounts exist
-        const { data: sampleData } = await supabase
-          .from('facebook_ad_accounts')
-          .select('id, name')
-          .limit(5);
-        
-        console.log('📋 Sample accounts in database:', sampleData);
-        
-        throw new Error(`Ad account ${accountIdStr} not found in database. Check if the account ID is correct.`);
-      }
-
-      if (allData.length > 1) {
-        console.warn('⚠️ Multiple accounts found with same ID:', allData);
-        console.log('🔧 Using first account from duplicates');
-      }
-
-      const userData = allData[0];
-      
-      if (!userData.user_id) {
-        throw new Error(`Account ${accountIdStr} found but has no associated user_id`);
-      }
-      
-      console.log('✅ Found user ID:', userData.user_id, 'for account:', userData.name);
-      return userData.user_id;
-    } catch (error) {
-      console.error('💥 Error in getUserFromAccount:', error);
-      throw error;
-    }
-  };
-
-  // Helper function to get Facebook token (defined inside executeFunction)
-  const getFacebookToken = async (supabase, userId) => {
-    console.log('🔍 Attempting to get Facebook token for userId:', userId);
-    
-    if (!userId) {
-      throw new Error('User ID is required');
-    }
-
-    if (!supabase) {
-      throw new Error('Supabase client is required');
-    }
-
-    try {
-      console.log('📡 Making Supabase query...');
-      const { data, error } = await supabase
-        .from('users')
-        .select('facebook_long_lived_token')
-        .eq('id', userId)
-        .single();
-
-      console.log('📊 Supabase response:', { data, error });
-
-      if (error) {
-        console.error('❌ Supabase error:', error);
-        throw new Error(`Supabase query failed: ${error.message}`);
-      }
-
-      if (!data) {
-        console.warn('⚠️ No user found with ID:', userId);
-        return null;
-      }
-
-      if (!data.facebook_long_lived_token) {
-        console.warn('⚠️ User found but no Facebook token for user ID:', userId);
-        return null;
-      }
-
-      console.log('✅ Facebook token retrieved successfully');
-      return data.facebook_long_lived_token;
-    } catch (error) {
-      console.error('💥 Error in getFacebookToken:', error);
-      throw error;
-    }
-  };
-
-  // Now execute the main function logic
-  const API_VERSION = process.env.FACEBOOK_API_VERSION || 'v23.0';
-  const baseUrl = `https://graph.facebook.com/${API_VERSION}`;
-  
   // Validate required params
   if (!account_id) {
     return { 
@@ -191,33 +64,8 @@ const executeFunction = async ({
     }
   }
 
-  // Debug input parameters
-  console.log('📥 Input parameters received:', {
-    account_id,
-    objective: normalizedObjective,
-    special_ad_categories: {
-      value: special_ad_categories,
-      type: typeof special_ad_categories,
-      isArray: Array.isArray(special_ad_categories),
-      length: Array.isArray(special_ad_categories) ? special_ad_categories.length : 'N/A'
-    }
-  });
-
   try {
-    console.log('🔍 Processing campaign creation for account:', account_id);
-
-    // Step 1: Find the user who owns this ad account
-    const userId = await getUserFromAccount(supabase, account_id);
-    
-    // Step 2: Get Facebook token for that user
-    const token = await getFacebookToken(supabase, userId);
-    
-    if (!token) {
-      return { 
-        error: 'No Facebook access token found for the user who owns this ad account',
-        details: `Account ${account_id} belongs to user ${userId} but they have no Facebook token`
-      };
-    }
+    const { token } = await resolveToken(account_id);
 
     // Generate campaign name with timestamp if not provided
     const campaignName = name || `Campaign ${normalizedObjective} ${new Date().toISOString()}`;
@@ -226,31 +74,24 @@ const executeFunction = async ({
     const stopTime = new Date();
     stopTime.setDate(stopTime.getDate() + 7);
 
-    const url = `${baseUrl}/act_${account_id}/campaigns`;
-    
-    // Log the parameters for debugging
-    console.log('📋 Campaign parameters before processing:', {
-      objective: normalizedObjective,
-      special_ad_categories,
-      type: typeof special_ad_categories,
-      isArray: Array.isArray(special_ad_categories)
-    });
+    const acctId = normalizeAccountId(account_id);
+    const url = `${baseUrl}/act_${acctId}/campaigns`;
 
     const campaignParams = {
       name: campaignName,
-      objective: normalizedObjective, // Now uses the properly validated and normalized objective
+      objective: normalizedObjective,
       status,
       buying_type,
       stop_time: stopTime.toISOString(),
       access_token: token
     };
 
-    // Handle special_ad_categories - try different approaches based on client behavior
+    // Handle special_ad_categories
     const specialAdCategoriesForApi =
     Array.isArray(special_ad_categories) && special_ad_categories.length > 0
       ? JSON.stringify(special_ad_categories)
       : JSON.stringify(['NONE']);
-  campaignParams.special_ad_categories = specialAdCategoriesForApi;
+    campaignParams.special_ad_categories = specialAdCategoriesForApi;
 
     // Campaign Budget Optimization (CBO) Logic
     if (campaign_budget_optimization) {
@@ -260,23 +101,10 @@ const executeFunction = async ({
       } else if (daily_budget && Number(daily_budget) > 0) {
         campaignParams.daily_budget = String(daily_budget);
       }
-    } else {
-      // CBO disabled: No budget at campaign level (budgets will be set at ad set level)
-      console.log('📊 Campaign Budget Optimization disabled - budgets will be set at ad set level');
-      console.log('⚠️ Note: You must set budgets when creating ad sets for this campaign');
     }
 
-    // Remove null/empty values
-    for (const [k, v] of Object.entries(campaignParams)) {
-      if (v == null || (typeof v === 'string' && v.trim() === '')) {
-        delete campaignParams[k];
-      }
-    }
-
-    const body = new URLSearchParams(campaignParams);
-
-    console.log('🚀 Making Facebook API request to:', url);
-    console.log('📋 Final campaign params being sent:', Object.fromEntries(body.entries()));
+    const cleanedParams = clean(campaignParams);
+    const body = new URLSearchParams(cleanedParams);
 
     const response = await fetch(url, {
       method: 'POST',
@@ -288,7 +116,7 @@ const executeFunction = async ({
 
     if (!response.ok) {
       const errorData = await response.json();
-      console.error('❌ Facebook API error:', errorData);
+      console.error('Facebook API error:', errorData);
       return { 
         error: `Campaign creation failed: ${errorData.error?.message || 'Unknown error'}`,
         details: errorData 
@@ -296,7 +124,6 @@ const executeFunction = async ({
     }
 
     const result = await response.json();
-    console.log('✅ Campaign created successfully:', result);
     
     return {
       success: true,
@@ -311,7 +138,7 @@ const executeFunction = async ({
       },
     };
   } catch (error) {
-    console.error('💥 Error in executeFunction:', error);
+    console.error('Error in executeFunction:', error);
     return { 
       error: 'An error occurred while creating the campaign.',
       details: error.message 
@@ -328,7 +155,7 @@ const apiTool = {
   definition: {
     type: 'function',
     function: {
-      name: 'create-campaign',
+      name: 'create_campaign',
       description: 'Create a Facebook campaign with the specified objective. Choose the appropriate objective based on your campaign goals.',
       parameters: {
         type: 'object',

@@ -3,36 +3,37 @@
  *
  * @param {Object} args - Arguments for the request.
  * @param {string} args.account_id - The ID of the Facebook Ad Account.
- * @param {string} args.token - The Bearer token for authentication.
+ * @param {string} [args.base_url] - The base URL for the API (optional).
  * @returns {Promise<Array>} - The list of agencies associated with the Ad Account.
  */
-const executeFunction = async ({ account_id }) => {
-  const baseUrl = ''; // will be provided by the user
-  const token = process.env.FACEBOOK_MARKETING_API_API_KEY;
-  try {
-    // Construct the URL for the request
-    const url = `${baseUrl}/act_${account_id}/agencies?fields=permitted_tasks`;
+import { getSupabaseClient, getTokenForAccount } from './_token-utils.js';
+import { getBaseUrl, normalizeAccountId, safeFacebookError } from './_shared-helpers.js';
 
-    // Set up headers for the request
+const executeFunction = async ({ account_id, base_url }) => {
+  const base = base_url || getBaseUrl();
+  const supabase = getSupabaseClient();
+  const acctId = normalizeAccountId(account_id);
+  const token = await getTokenForAccount(supabase, acctId);
+  if (!token) return { error: 'No Facebook access token found for this ad account' };
+  try {
+    const url = `${base}/act_${acctId}/agencies?fields=permitted_tasks`;
+
     const headers = {
       'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json'
     };
 
-    // Perform the fetch request
     const response = await fetch(url, {
       method: 'GET',
       headers
     });
 
-    // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
       console.error('Error fetching agencies:', JSON.stringify(errorData));
-      throw new Error(errorData);
+      throw new Error(safeFacebookError(errorData));
     }
 
-    // Parse and return the response data
     const data = await response.json();
     return data;
   } catch (error) {
@@ -50,7 +51,7 @@ const apiTool = {
   definition: {
     type: 'function',
     function: {
-      name: 'GetAgencies',
+      name: 'get_agencies',
       description: 'Get agencies associated with a Facebook Ad Account.',
       parameters: {
         type: 'object',
@@ -58,6 +59,10 @@ const apiTool = {
           account_id: {
             type: 'string',
             description: 'The ID of the Facebook Ad Account.'
+          },
+          base_url: {
+            type: 'string',
+            description: 'The base URL for the Facebook API (optional).'
           }
         },
         required: ['account_id']

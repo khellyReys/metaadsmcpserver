@@ -2,16 +2,22 @@
  * Function to get insights for an ads group from the Facebook Marketing API.
  *
  * @param {Object} args - Arguments for the insights request.
+ * @param {string} args.userId - The user ID (Supabase auth) to retrieve the Facebook token.
  * @param {string} args.ad_id - The ID of the ad for which insights are requested.
  * @param {string} [args.date_preset="maximum"] - The date preset for the insights.
  * @param {number} [args.limit=100] - The number of insights to return.
  * @param {string} [args.action_breakdowns="action_type"] - The breakdown of actions.
  * @param {string} [args.time_increment="all_days"] - The time increment for the insights.
+ * @param {string} [args.base_url] - The base URL for the Facebook API (optional).
  * @returns {Promise<Object>} - The insights data for the specified ad.
  */
-const executeFunction = async ({ ad_id, date_preset = 'maximum', limit = 100, action_breakdowns = 'action_type', time_increment = 'all_days' }) => {
-  const baseUrl = 'https://graph.facebook.com/v12.0'; // Adjust version as needed
-  const token = process.env.FACEBOOK_MARKETING_API_API_KEY;
+import { getSupabaseClient, getTokenForUser } from './_token-utils.js';
+
+const executeFunction = async ({ userId, ad_id, date_preset = 'maximum', limit = 100, action_breakdowns = 'action_type', time_increment = 'all_days', base_url }) => {
+  const baseUrl = base_url || `https://graph.facebook.com/${process.env.FACEBOOK_API_VERSION || 'v22.0'}`;
+  const supabase = getSupabaseClient();
+  const token = await getTokenForUser(supabase, userId);
+  if (!token) return { error: 'No Facebook access token found for this user' };
 
   try {
     // Construct the URL with query parameters
@@ -59,11 +65,15 @@ const apiTool = {
   definition: {
     type: 'function',
     function: {
-      name: 'GetInsightForAdsGroup',
+      name: 'get_ad_insights',
       description: 'Get insights for a specific ads group from Facebook Marketing API.',
       parameters: {
         type: 'object',
         properties: {
+          userId: {
+            type: 'string',
+            description: 'The user ID (Supabase auth) to retrieve the Facebook token.'
+          },
           ad_id: {
             type: 'string',
             description: 'The ID of the ad for which insights are requested.'
@@ -83,9 +93,13 @@ const apiTool = {
           time_increment: {
             type: 'string',
             description: 'The time increment for the insights.'
+          },
+          base_url: {
+            type: 'string',
+            description: 'The base URL for the Facebook API (optional).'
           }
         },
-        required: ['ad_id']
+        required: ['userId', 'ad_id']
       }
     }
   }

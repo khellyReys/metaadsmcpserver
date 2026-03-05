@@ -3,34 +3,39 @@
  *
  * @param {Object} args - Arguments for the request.
  * @param {string} args.account_id - The ID of the ad account to retrieve creatives from.
- * @param {string} [args.base_url='https://graph.facebook.com/v12.0'] - The base URL for the Facebook Marketing API.
+ * @param {string} [args.fields] - Comma-separated list of fields to retrieve.
  * @returns {Promise<Object>} - The list of ad creatives or an error message.
  */
-const executeFunction = async ({ account_id, base_url = 'https://graph.facebook.com/v12.0' }) => {
-  const token = process.env.FACEBOOK_MARKETING_API_API_KEY;
-  try {
-    // Construct the URL for the request
-    const url = `${base_url}/act_${account_id}/adcreatives/`;
+import { getSupabaseClient, getTokenForAccount } from './_token-utils.js';
+import { getBaseUrl, normalizeAccountId, safeFacebookError } from './_shared-helpers.js';
 
-    // Set up headers for the request
+const DEFAULT_FIELDS = 'id,name,status,object_story_spec,object_type,image_hash,video_id,body,title,thumbnail_url';
+
+const executeFunction = async ({ account_id, fields }) => {
+  const base = getBaseUrl();
+  const supabase = getSupabaseClient();
+  const token = await getTokenForAccount(supabase, account_id);
+  if (!token) return { error: 'No Facebook access token found for this ad account' };
+
+  const acctId = normalizeAccountId(account_id);
+  const requestFields = fields || DEFAULT_FIELDS;
+
+  try {
+    const url = new URL(`${base}/act_${acctId}/adcreatives`);
+    url.searchParams.append('fields', requestFields);
+
     const headers = {
       'Authorization': `Bearer ${token}`
     };
 
-    // Perform the fetch request
-    const response = await fetch(url, {
-      method: 'GET',
-      headers
-    });
+    const response = await fetch(url.toString(), { method: 'GET', headers });
 
-    // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
       console.error('Error fetching ad creatives:', JSON.stringify(errorData));
-      throw new Error(errorData);
+      throw new Error(safeFacebookError(errorData));
     }
 
-    // Parse and return the response data
     const data = await response.json();
     return data;
   } catch (error) {
@@ -39,16 +44,12 @@ const executeFunction = async ({ account_id, base_url = 'https://graph.facebook.
   }
 };
 
-/**
- * Tool configuration for getting the list of ad creatives from Facebook Marketing API.
- * @type {Object}
- */
 const apiTool = {
   function: executeFunction,
   definition: {
     type: 'function',
     function: {
-      name: 'GetCreativesList',
+      name: 'get_creatives_list',
       description: 'Get the list of ad creatives from Facebook Marketing API.',
       parameters: {
         type: 'object',
@@ -57,9 +58,9 @@ const apiTool = {
             type: 'string',
             description: 'The ID of the ad account to retrieve creatives from.'
           },
-          base_url: {
+          fields: {
             type: 'string',
-            description: 'The base URL for the Facebook Marketing API.'
+            description: 'Comma-separated list of fields to retrieve (optional).'
           }
         },
         required: ['account_id']

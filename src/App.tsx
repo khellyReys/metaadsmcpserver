@@ -9,6 +9,7 @@ import Pricing from './components/Pricing';
 import Footer from './components/Footer';
 import AdTools from './components/AdTools';
 import Dashboard from './components/Dashboard';
+import Spinner from './components/Spinner';
 import authService from './auth/authService';
 
 // Landing page component that uses proper navigation
@@ -20,7 +21,7 @@ const LandingPage = () => {
   };
 
   return (
-    <div className="min-h-screen bg-white">
+    <div className="min-h-screen bg-white dark:bg-gray-900">
       <Header onGetStarted={handleGetStarted} />
       <Hero onGetStarted={handleGetStarted} />
       <Features />
@@ -43,7 +44,7 @@ const AuthCallback = () => {
         // Supabase automatically handles the OAuth callback
         // Just redirect to dashboard and let it handle the session
         navigate('/dashboard');
-      } catch (error) {
+      } catch {
         navigate('/dashboard');
       } finally {
         setIsLoading(false);
@@ -55,10 +56,10 @@ const AuthCallback = () => {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-white to-purple-50">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-600 mx-auto"></div>
-          <p className="mt-4 text-gray-600">Processing authentication...</p>
+          <Spinner size="md" className="mx-auto" />
+          <p className="mt-4 text-gray-600 dark:text-gray-300">Processing authentication...</p>
         </div>
       </div>
     );
@@ -67,16 +68,69 @@ const AuthCallback = () => {
   return null;
 };
 
+const WORKSPACE_STORAGE_KEY = 'meta_ads_workspace';
+
 // Main app wrapper component
 const AppContent = () => {
+  const location = useLocation();
+  const navigate = useNavigate();
+
   // Updated state to handle all required parameters
   const [selectedBusinessId, setSelectedBusinessId] = useState<string>('');
   const [selectedAdAccountId, setSelectedAdAccountId] = useState<string>('');
   const [selectedPageId, setSelectedPageId] = useState<string>('');
   const [serverId, setServerId] = useState<string>('');
   const [serverAccessToken, setServerAccessToken] = useState<string>('');
-  
-  const navigate = useNavigate();
+  const [userId, setUserId] = useState<string>('');
+  const [hasTriedRestore, setHasTriedRestore] = useState(false);
+
+  const hasWorkspaceState = Boolean(
+    selectedBusinessId && selectedAdAccountId && selectedPageId && serverId && serverAccessToken
+  );
+
+  // Restore workspace from sessionStorage when refreshing on /workspace
+  useEffect(() => {
+    if (location.pathname !== '/workspace') {
+      setHasTriedRestore(false);
+      return;
+    }
+    if (hasWorkspaceState) {
+      setHasTriedRestore(true);
+      return;
+    }
+    if (hasTriedRestore) return;
+
+    const raw = sessionStorage.getItem(WORKSPACE_STORAGE_KEY);
+    if (raw) {
+      try {
+        const data = JSON.parse(raw) as {
+          businessId?: string;
+          adAccountId?: string;
+          pageId?: string;
+          serverId?: string;
+          serverAccessToken?: string;
+          userId?: string;
+        };
+        if (
+          data.businessId &&
+          data.adAccountId &&
+          data.pageId &&
+          data.serverId &&
+          data.serverAccessToken
+        ) {
+          setSelectedBusinessId(data.businessId);
+          setSelectedAdAccountId(data.adAccountId);
+          setSelectedPageId(data.pageId);
+          setServerId(data.serverId);
+          setServerAccessToken(data.serverAccessToken);
+          setUserId(data.userId || '');
+        }
+      } catch {
+        // Invalid or corrupted data, will redirect to dashboard below
+      }
+    }
+    setHasTriedRestore(true);
+  }, [location.pathname, hasTriedRestore, hasWorkspaceState]);
 
   // Updated handler to accept all required parameters
   const handleBusinessSelected = (
@@ -84,35 +138,44 @@ const AppContent = () => {
     businessId: string,
     adAccountId: string,
     pageId: string,
-    serverAccessTokenParam: string
+    serverAccessTokenParam: string,
+    userIdParam?: string
   ) => {
-    
     if (!serverIdParam || !businessId || !adAccountId || !pageId || !serverAccessTokenParam) {
-      
       return;
     }
-    
-    // Set all required state
+
+    sessionStorage.setItem(
+      WORKSPACE_STORAGE_KEY,
+      JSON.stringify({
+        businessId,
+        adAccountId,
+        pageId,
+        serverId: serverIdParam,
+        serverAccessToken: serverAccessTokenParam,
+        userId: userIdParam || '',
+      })
+    );
+
     setSelectedBusinessId(businessId);
     setSelectedAdAccountId(adAccountId);
     setSelectedPageId(pageId);
     setServerId(serverIdParam);
     setServerAccessToken(serverAccessTokenParam);
-    
+    setUserId(userIdParam || '');
+
     navigate('/workspace');
   };
 
   const handleLogout = () => {
-    // Use auth service to logout
     authService.logout();
-    
-    // Clear all selection state
+    sessionStorage.removeItem(WORKSPACE_STORAGE_KEY);
     setSelectedBusinessId('');
     setSelectedAdAccountId('');
     setSelectedPageId('');
     setServerId('');
     setServerAccessToken('');
-    
+    setUserId('');
     navigate('/');
   };
 
@@ -121,11 +184,11 @@ const AppContent = () => {
       {/* Landing page */}
       <Route path="/" element={<LandingPage />} />
       
-      {/* Dashboard route - Server Management */}
+      {/* Dashboard routes - step-based URLs: /dashboard, /dashboard/server, /dashboard/business, /dashboard/adaccount, /dashboard/page */}
       <Route 
-        path="/dashboard" 
+        path="/dashboard/*" 
         element={
-          <Dashboard onServerSelected={handleBusinessSelected} />
+          <Dashboard onServerSelected={handleBusinessSelected} onLogout={handleLogout} />
         } 
       />
       
@@ -133,17 +196,24 @@ const AppContent = () => {
       <Route 
         path="/workspace" 
         element={
-          selectedBusinessId && selectedAdAccountId && selectedPageId && serverId && serverAccessToken ? (
+          hasWorkspaceState ? (
             <AdTools
               businessId={selectedBusinessId}
               adAccountId={selectedAdAccountId}
               pageId={selectedPageId}
-              secret={serverId} // Using serverId as secret - adjust if needed
               serverId={serverId}
               serverAccessToken={serverAccessToken}
+              userId={userId}
             />
+          ) : !hasTriedRestore ? (
+            <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
+              <div className="text-center">
+                <Spinner size="md" className="mx-auto" />
+                <p className="mt-4 text-gray-600 dark:text-gray-300">Loading workspace...</p>
+              </div>
+            </div>
           ) : (
-            <Navigate to="/dashboard" replace />
+            <Navigate to="/dashboard/server" replace />
           )
         } 
       />
@@ -154,11 +224,11 @@ const AppContent = () => {
       {/* Legacy routes - redirect to new structure */}
       <Route 
         path="/login" 
-        element={<Navigate to="/dashboard" replace />} 
+        element={<Navigate to="/dashboard/server" replace />} 
       />
       <Route 
         path="/auth" 
-        element={<Navigate to="/dashboard" replace />} 
+        element={<Navigate to="/dashboard/server" replace />} 
       />
       <Route 
         path="/tools" 

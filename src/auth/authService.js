@@ -1,8 +1,15 @@
 // src/auth/authService.js - Fixed version
 import { createClient } from '@supabase/supabase-js';
+import { getEnvVar } from '../lib/env';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabaseUrl = getEnvVar('VITE_SUPABASE_URL');
+const supabaseAnonKey = getEnvVar('VITE_SUPABASE_ANON_KEY');
+
+if (!supabaseUrl || !supabaseAnonKey) {
+  throw new Error(
+    'Supabase env vars are missing. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to your .env file in the project root (same folder as vite.config.ts), then restart the dev server (npm run dev).'
+  );
+}
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
@@ -190,8 +197,10 @@ class AuthService {
       const { error } = await supabase.auth.signOut();
       
       if (error) {
+        console.error('[authService] signOut error:', error.message);
       }
     } catch (error) {
+      console.error('[authService] logout error:', error?.message ?? error);
     } finally {
       // Always clear local auth data
       this.clearAuth();

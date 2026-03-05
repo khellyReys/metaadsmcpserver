@@ -1,37 +1,18 @@
+# Render Blueprint: Meta Ads MCP Server
+# https://render.com/docs/blueprint-spec
 services:
   - type: web
     name: metaadsmcpserver
     runtime: node
-    region: oregon  # or your preferred region
-    plan: starter   # or your preferred plan
-    buildCommand: |
-      npm install
-      # Add your frontend build command if needed
-      # npm run build
-    startCommand: node mcpServer.js --sse
+    region: oregon
+
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
-        fromService:
-          type: web
-          name: metaadsmcpserver
-          property: port
-    # Add any other environment variables you need
-    # - key: YOUR_API_KEY
-    #   sync: false  # This will require you to set it manually in Render dashboard
-    
-    # Health check configuration
-    healthCheckPath: /health
-    
-    # Auto-deploy from your main branch
-    autoDeploy: true
-    
-    # Build settings
-    rootDir: .  # Adjust if your server code is in a subdirectory
-    
-    # Disk space (if you need persistent storage)
-    # disk:
-    #   name: data
-    #   mountPath: /app/data
-    #   sizeGB: 1
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false

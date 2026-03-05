@@ -9,6 +9,8 @@
  *  4) POST /act_<account_id>/ads with returned creative_id
  */
 
+import { getBaseUrl, resolveToken, clean } from './_shared-helpers.js';
+
 const executeFunction = async ({
     // 1) Routing / placement
     account_id,               // REQUIRED: ad account ID (no "act_" prefix)
@@ -39,65 +41,7 @@ const executeFunction = async ({
     // 7) CAROUSEL-specific
     child_attachments = []    // [{ name, description, link_url, image_hash?, video_id? }, ...] (2–10)
   }) => {
-    // Only import and initialize Node-only dependencies at execution time
-    const { createClient } = await import('@supabase/supabase-js');
-  
-    // Create Supabase client only when function executes
-    const supabase = createClient(
-      process.env.SUPABASE_URL,
-      process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY,
-      { auth: { autoRefreshToken: false, persistSession: false } }
-    );
-  
-    // ---- Helpers ----
-    const API_VERSION = process.env.FACEBOOK_API_VERSION || 'v23.0';
-    const baseUrl = `https://graph.facebook.com/${API_VERSION}`;
-  
-    const getUserFromAccount = async (supabaseClient, accountId) => {
-      console.log('🔍 Finding user for account ID:', accountId);
-      if (!accountId) throw new Error('Account ID is required');
-  
-      const accountIdStr = String(accountId).trim();
-      const { data, error } = await supabaseClient
-        .from('facebook_ad_accounts')
-        .select('user_id, id, name')
-        .eq('id', accountIdStr);
-  
-      if (error) throw new Error(`Account lookup failed: ${error.message}`);
-      if (!data || data.length === 0)
-        throw new Error(`Ad account ${accountIdStr} not found in database.`);
-  
-      const row = data[0];
-      if (!row.user_id)
-        throw new Error(`Account ${accountIdStr} found but has no associated user_id`);
-      console.log('✅ Found user ID:', row.user_id, 'for account:', row.name);
-      return row.user_id;
-    };
-  
-    const getFacebookToken = async (supabaseClient, userId) => {
-      console.log('🔑 Getting Facebook token for userId:', userId);
-      const { data, error } = await supabaseClient
-        .from('users')
-        .select('facebook_long_lived_token')
-        .eq('id', userId)
-        .single();
-      if (error) throw new Error(`Supabase query failed: ${error.message}`);
-      return data?.facebook_long_lived_token || null;
-    };
-  
-    const clean = (obj) => {
-      const o = { ...obj };
-      Object.entries(o).forEach(([k, v]) => {
-        if (
-          v == null ||
-          (typeof v === 'string' && v.trim() === '') ||
-          (Array.isArray(v) && v.length === 0)
-        ) {
-          delete o[k];
-        }
-      });
-      return o;
-    };
+    const baseUrl = getBaseUrl();
   
     const buildObjectStorySpec = ({
       actor, creative_type, message,
@@ -203,15 +147,8 @@ const executeFunction = async ({
     });
   
     try {
-      // Step 1: Get user and token
-      const userId = await getUserFromAccount(supabase, account_id);
-      const token = await getFacebookToken(supabase, userId);
-      if (!token) {
-        return {
-          error: 'No Facebook access token found for the user who owns this ad account',
-          details: `Account ${account_id} belongs to user ${userId} but they have no Facebook token`
-        };
-      }
+      // Step 1: Get token
+      const { token } = await resolveToken(account_id);
   
       // Step 2: Build object_story_spec
       const actor = page_id ? { page_id } : { instagram_actor_id };
@@ -317,7 +254,7 @@ const executeFunction = async ({
     definition: {
       type: 'function',
       function: {
-        name: 'create-ad-with-creative',
+        name: 'create_ad_with_creative',
         description:
           'Create a Facebook Ad Creative and then the Ad in a single call. Supports LINK, VIDEO, and CAROUSEL object_story_spec.',
         parameters: {
