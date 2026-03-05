@@ -422,11 +422,14 @@ async function run() {
       }
 
       try {
-        const sessionId = req.headers["mcp-session-id"];
+        const rawSessionId = req.headers["mcp-session-id"];
+        const sessionId = Array.isArray(rawSessionId) ? rawSessionId[0] : rawSessionId;
+        const normalizedSessionId = typeof sessionId === "string" ? sessionId.trim() : "";
+        const isInitRequest = req.method === "POST" && isInitializeRequest(req.body);
         let transport;
 
-        if (sessionId && transports[sessionId]) {
-          const existing = transports[sessionId];
+        if (normalizedSessionId && transports[normalizedSessionId]) {
+          const existing = transports[normalizedSessionId];
           if (existing instanceof StreamableHTTPServerTransport) {
             transport = existing;
           } else {
@@ -436,7 +439,10 @@ async function run() {
               id: null,
             });
           }
-        } else if (!sessionId && req.method === "POST" && isInitializeRequest(req.body)) {
+        } else if (isInitRequest) {
+          if (normalizedSessionId && !transports[normalizedSessionId]) {
+            console.log(`[MCP-HTTP] Ignoring stale session ID on initialize: ${normalizedSessionId}`);
+          }
           transport = new StreamableHTTPServerTransport({
             sessionIdGenerator: () => randomUUID(),
             onsessioninitialized: (sid) => {
@@ -465,10 +471,16 @@ async function run() {
           if (transport.sessionId) {
             servers[transport.sessionId] = server;
           }
+        } else if (normalizedSessionId && !transports[normalizedSessionId]) {
+          return res.status(400).json({
+            jsonrpc: "2.0",
+            error: { code: -32000, message: "Bad Request: Unknown or expired session ID. Re-run initialize." },
+            id: null,
+          });
         } else {
           return res.status(400).json({
             jsonrpc: "2.0",
-            error: { code: -32000, message: "Bad Request: No valid session ID provided" },
+            error: { code: -32000, message: "Bad Request: No valid session ID provided. Send initialize first." },
             id: null,
           });
         }
