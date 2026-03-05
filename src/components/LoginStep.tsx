@@ -23,42 +23,42 @@ const LoginStep: React.FC<LoginStepProps> = ({
   variant = 'connect',
 }) => {
   const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [configError, setConfigError] = useState<string | null>(null);
 
   const handleFacebookLogin = async () => {
     onClearError();
+    setConfigError(null);
     setIsAuthenticating(true);
 
     try {
-      // Prefer current origin when on localhost so local dev redirects back correctly
+      const supabaseUrl = getEnvVar('VITE_SUPABASE_URL');
+      const appId = getEnvVar('VITE_FACEBOOK_APP_ID');
       const isLocalhost = typeof window !== 'undefined' && /^https?:\/\/localhost(:\d+)?$/.test(window.location.origin);
-      const frontendUrl = isLocalhost
+      const appRedirect = isLocalhost
         ? window.location.origin
         : (getEnvVar('VITE_APP_URL') || (typeof window !== 'undefined' ? window.location.origin : ''));
-      const redirectUrl = `${frontendUrl}/dashboard`;
+      const redirectBack = `${appRedirect}/dashboard`;
 
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: 'facebook',
-        options: {
-          scopes: 'email pages_read_engagement pages_manage_posts pages_show_list business_management ads_management ads_read',
-          redirectTo: redirectUrl,
-          queryParams: {
-            access_type: 'offline',
-            prompt: 'consent',
-          }
-        }
-      });
-
-      if (error) {
+      // Custom Facebook OAuth: no email required. Redirect to our Edge Function callback.
+      const callbackUrl = supabaseUrl ? `${supabaseUrl}/functions/v1/auth-facebook` : null;
+      if (!callbackUrl || !appId) {
         setIsAuthenticating(false);
-        throw error;
+        setConfigError('Missing VITE_SUPABASE_URL or VITE_FACEBOOK_APP_ID. Add them to your environment.');
+        return;
       }
 
-      // OAuth redirect will happen automatically
+      const state = encodeURIComponent(JSON.stringify({ redirect: redirectBack }));
+      const scope = 'pages_read_engagement pages_manage_posts pages_show_list business_management ads_management ads_read';
+      const fbAuthUrl = `https://www.facebook.com/v22.0/dialog/oauth?` +
+        `client_id=${appId}&` +
+        `redirect_uri=${encodeURIComponent(callbackUrl)}&` +
+        `scope=${encodeURIComponent(scope)}&` +
+        `state=${state}`;
+
       onLogin();
-      
+      window.location.href = fbAuthUrl;
     } catch {
       setIsAuthenticating(false);
-      // Error will be handled by parent component through auth state changes
     }
   };
 
@@ -84,11 +84,11 @@ const LoginStep: React.FC<LoginStepProps> = ({
           </div>
 
           {/* Error Display */}
-          {error && (
+          {(error || configError) && (
             <div className="mb-6 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg flex items-start space-x-3">
               <AlertCircle className="w-5 h-5 text-red-500 dark:text-red-400 mt-0.5 flex-shrink-0" />
               <div>
-                <p className="text-red-800 dark:text-red-300 text-sm">{error}</p>
+                <p className="text-red-800 dark:text-red-300 text-sm">{error || configError}</p>
               </div>
             </div>
           )}

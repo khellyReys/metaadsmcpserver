@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { ArrowRight, Building2, Users, CheckCircle, AlertCircle, RefreshCw, FileText, Search, ChevronLeft, ChevronRight, User } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { ArrowRight, Building2, Users, CheckCircle, AlertCircle, FileText, Search, ChevronLeft, ChevronRight, User } from 'lucide-react';
 import Spinner from './Spinner';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { fetchWithTimeout, promiseWithTimeout } from '../lib/asyncUtils';
@@ -63,14 +63,23 @@ interface BusinessSelectionStepProps {
   selectedBusiness: string;
   facebookAccessToken: string;
   error: string;
-  // Updated handler signature to include all required parameters
   onBusinessSelected: (
     serverId: string,
     businessId: string,
     adAccountId: string,
     pageId: string,
     serverAccessToken: string,
-    userId?: string
+    userId?: string,
+    names?: { businessName: string; adAccountName: string; pageName: string }
+  ) => void;
+  onSaveServer?: (
+    serverId: string,
+    businessId: string,
+    adAccountId: string,
+    pageId: string,
+    serverAccessToken: string,
+    userId?: string,
+    names?: { businessName: string; adAccountName: string; pageName: string }
   ) => void;
   onBusinessSelectionChange: (businessId: string) => void;
   onBusinessAccountsChange: (accounts: BusinessAccount[]) => void;
@@ -95,6 +104,7 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
   facebookAccessToken,
   error,
   onBusinessSelected,
+  onSaveServer,
   onBusinessSelectionChange,
   onBusinessAccountsChange,
   onBackToServers,
@@ -102,20 +112,39 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
   onBackToAdAccounts,
   onAdvanceToAdAccount,
   onAdvanceToPage,
-  onClearError,
+  onClearError: _onClearError,
   supabase,
   onFetchingProgress = () => {},
   initialStep,
   initialAdAccountId,
 }) => {
-  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [_isRefreshing, setIsRefreshing] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [localError, setLocalError] = useState('');
   const restoreToPageDone = React.useRef(false);
+  const timerRefs = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const [loadingAdAccounts, setLoadingAdAccounts] = useState(false);
+  const [loadingPages, setLoadingPages] = useState(false);
+
+  useEffect(() => {
+    return () => { timerRefs.current.forEach(clearTimeout); };
+  }, []);
+
+  const safeTimeout = (fn: () => void, ms: number) => {
+    const id = setTimeout(() => {
+      timerRefs.current = timerRefs.current.filter(t => t !== id);
+      fn();
+    }, ms);
+    timerRefs.current.push(id);
+    return id;
+  };
 
   useVisibilityReset(() => {
     setLoadingAdAccounts(false);
     setLoadingPages(false);
     setIsProcessing(false);
+    setIsSaving(false);
     setIsRefreshing(false);
   });
 
@@ -126,12 +155,10 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
   }, [initialStep]);
   const [adAccounts, setAdAccounts] = useState<AdAccount[]>([]);
   const [selectedAdAccount, setSelectedAdAccount] = useState<string>(initialAdAccountId ?? '');
-  const [loadingAdAccounts, setLoadingAdAccounts] = useState(false);
   
   // New state for Facebook page selection
   const [facebookPages, setFacebookPages] = useState<FacebookPage[]>([]);
   const [selectedPage, setSelectedPage] = useState<string>('');
-  const [loadingPages, setLoadingPages] = useState(false);
   const [hasAttemptedPageLoad, setHasAttemptedPageLoad] = useState(false);
   const [pageSearchQuery, setPageSearchQuery] = useState('');
   const [pagePage, setPagePage] = useState(1);
@@ -236,7 +263,7 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
         })().catch(() => {});
       }
 
-      setTimeout(() => {
+      safeTimeout(() => {
         onFetchingProgress?.(0, '');
       }, 1000);
     } catch {
@@ -448,26 +475,18 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
     })();
   }, [initialStep, initialAdAccountId, selectedBusiness]);
 
-  const handleRefreshData = async () => {
-    setIsRefreshing(true);
-    onClearError();
-    try {
-      await promiseWithTimeout(
-        (async () => { await fetchAndSaveBusinessAccounts(); })(),
-        30000
-      );
-    } catch {
-      // Error or timeout - handled by parent / visibility reset
-    } finally {
-      setIsRefreshing(false);
-    }
-  };
-
   const handleBusinessCardClick = (businessId: string) => {
     onBusinessSelectionChange(businessId);
   };
 
-  // Updated continue handler for three-step flow (navigate when callbacks provided for URL-driven flow)
+  const resolveNames = () => {
+    const allBusinesses = [PERSONAL_BUSINESS_OPTION, ...businessAccounts];
+    const businessName = allBusinesses.find(b => b.id === selectedBusiness)?.name || selectedBusiness;
+    const adAccountName = adAccounts.find(a => a.id === selectedAdAccount)?.name || selectedAdAccount;
+    const pageName = facebookPages.find(p => p.id === selectedPage)?.name || selectedPage;
+    return { businessName, adAccountName, pageName };
+  };
+
   const handleContinue = async () => {
     if (currentStep === 'business' && selectedBusiness) {
       try {
@@ -492,9 +511,7 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
     } else if (currentStep === 'page' && selectedPage) {
       setIsProcessing(true);
       try {
-        const pageIdToSend = typeof selectedPage === 'object' && selectedPage?.id 
-          ? selectedPage.id 
-          : selectedPage;
+        const pageIdToSend = selectedPage;
 
         const selectedServerData = servers.find(s => s.id === selectedServer);
         if (!selectedServerData) {
@@ -509,16 +526,53 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
               selectedAdAccount,
               pageIdToSend,
               selectedServerData.access_token,
-              currentUser.id
+              currentUser.id,
+              resolveNames()
             )
           ),
           30000
         );
-      } catch {
-        // Error or timeout - handled by parent / visibility reset
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : 'Failed to open tools. Please try again.';
+        setLocalError(msg);
+        safeTimeout(() => setLocalError(''), 6000);
       } finally {
         setIsProcessing(false);
       }
+    }
+  };
+
+  const handleSaveServer = async () => {
+    if (!selectedPage || !onSaveServer) return;
+    setIsSaving(true);
+    try {
+      const pageIdToSend = selectedPage;
+
+      const selectedServerData = servers.find(s => s.id === selectedServer);
+      if (!selectedServerData) {
+        throw new Error('Server not found');
+      }
+
+      await promiseWithTimeout(
+        Promise.resolve(
+          onSaveServer(
+            selectedServer,
+            selectedBusiness,
+            selectedAdAccount,
+            pageIdToSend,
+            selectedServerData.access_token,
+            currentUser.id,
+            resolveNames()
+          )
+        ),
+        30000
+      );
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to save server. Please try again.';
+      setLocalError(msg);
+      safeTimeout(() => setLocalError(''), 6000);
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -596,7 +650,7 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
     // currentStep === 'page'
     return {
       isLoading: isProcessing,
-      label: isProcessing ? 'Configuring account...' : 'Continue to Tools',
+      label: isProcessing ? 'Opening tools...' : 'Continue to Tools',
     };
   };
   
@@ -678,11 +732,11 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
         </div>
 
         {/* Error Display */}
-        {error && (
+        {(error || localError) && (
           <div className="mb-6 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg flex items-start space-x-3 max-w-2xl mx-auto">
             <AlertCircle className="w-5 h-5 text-red-500 dark:text-red-400 mt-0.5 flex-shrink-0" />
             <div>
-              <p className="text-red-800 dark:text-red-300 text-sm">{error}</p>
+              <p className="text-red-800 dark:text-red-300 text-sm">{error || localError}</p>
             </div>
           </div>
         )}
@@ -884,35 +938,56 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
                       <div
                         key={page.id}
                         onClick={() => setSelectedPage(page.id)}
-                        className={`bg-white dark:bg-gray-800 rounded-xl p-6 border-2 cursor-pointer transition-all duration-200 hover:shadow-lg ${
+                        className={`bg-white dark:bg-gray-800 rounded-xl overflow-hidden border-2 cursor-pointer transition-all duration-200 hover:shadow-lg ${
                           selectedPage === page.id
                             ? 'border-blue-500 dark:border-blue-400 shadow-lg'
                             : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
                         }`}
                       >
+                        {/* Cover photo - Facebook-style banner at top */}
+                        <div className="relative w-full h-28 sm:h-32 bg-gray-200 dark:bg-gray-700">
+                          {page.cover_url ? (
+                            <img
+                              src={page.cover_url}
+                              alt=""
+                              className="absolute inset-0 w-full h-full object-cover object-center"
+                            />
+                          ) : (
+                            <div className="absolute inset-0 bg-gradient-to-br from-gray-300 to-gray-400 dark:from-gray-600 dark:to-gray-700" />
+                          )}
+                        </div>
+
+                        <div className="p-6 pt-4">
                         <div className="flex items-start justify-between mb-4">
                           <div className="flex items-center space-x-3">
                             {page.picture_url ? (
                               <img 
                                 src={page.picture_url} 
                                 alt={page.name}
-                                className="w-12 h-12 rounded-lg object-cover"
+                                className="w-12 h-12 rounded-lg object-cover shrink-0"
                               />
                             ) : (
-                              <div className="w-12 h-12 bg-gradient-to-br from-purple-100 to-pink-100 dark:from-purple-900/30 dark:to-pink-900/30 rounded-lg flex items-center justify-center">
+                              <div className="w-12 h-12 bg-gradient-to-br from-purple-100 to-pink-100 dark:from-purple-900/30 dark:to-pink-900/30 rounded-lg flex items-center justify-center shrink-0">
                                 <FileText className="w-6 h-6 text-purple-600 dark:text-purple-400" />
                               </div>
                             )}
-                            <div>
-                              <h3 className="font-semibold text-gray-900 dark:text-gray-100">{page.name}</h3>
+                            <div className="min-w-0">
+                              <h3 className="font-semibold text-gray-900 dark:text-gray-100 truncate">{page.name}</h3>
                               <p className="text-sm text-gray-500 dark:text-gray-400">{page.category}</p>
-                              {page.verification_status && (
-                                <p className="text-xs text-blue-600 dark:text-blue-400">{page.verification_status}</p>
-                              )}
+                              <div className="flex flex-wrap items-center gap-2 mt-0.5">
+                                {page.page_role && (
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300">
+                                    {page.page_role}
+                                  </span>
+                                )}
+                                {page.verification_status && (
+                                  <p className="text-xs text-blue-600 dark:text-blue-400">{page.verification_status}</p>
+                                )}
+                              </div>
                             </div>
                           </div>
                           {selectedPage === page.id && (
-                            <CheckCircle className="w-6 h-6 text-blue-500 dark:text-blue-400" />
+                            <CheckCircle className="w-6 h-6 text-blue-500 dark:text-blue-400 shrink-0" />
                           )}
                         </div>
 
@@ -949,6 +1024,7 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
                             )}
                           </div>
                         )}
+                        </div>
                       </div>
                     ))}
                         </div>
@@ -989,33 +1065,76 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
               </>
             )}
 
-            {/* Continue Button - Updated to handle all three steps */}
+            {/* Continue / Save Buttons */}
             {((currentStep === 'business' && selectedBusiness) || 
               (currentStep === 'adaccount' && selectedAdAccount) ||
               (currentStep === 'page' && selectedPage)) && (
-              <div className="text-center">
-                {(() => {
-                  const { isLoading, label } = getContinueButtonState();
-                  return (
-                    <button
-                      onClick={handleContinue}
-                      disabled={isLoading}
-                      className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-8 py-3 rounded-xl font-semibold hover:shadow-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2 mx-auto"
-                    >
-                      {isLoading ? (
-                        <>
-                          <Spinner size="xs" variant="white" />
-                          <span>{label}</span>
-                        </>
-                      ) : (
-                        <>
-                          <span>{label}</span>
-                          <ArrowRight className="w-4 h-4" />
-                        </>
-                      )}
-                    </button>
-                  );
-                })()}
+              <div className="flex flex-col items-center gap-3">
+                {currentStep === 'page' && selectedPage ? (
+                  <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
+                    {onSaveServer && (
+                      <button
+                        onClick={handleSaveServer}
+                        disabled={isSaving || isProcessing}
+                        className="order-2 sm:order-1 w-full sm:w-auto bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-800 dark:text-gray-200 px-8 py-3 rounded-xl font-semibold transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2 border border-gray-300 dark:border-gray-600"
+                      >
+                        {isSaving ? (
+                          <>
+                            <Spinner size="xs" variant="default" />
+                            <span>Saving server...</span>
+                          </>
+                        ) : (
+                          <span>Save Server</span>
+                        )}
+                      </button>
+                    )}
+                    {(() => {
+                      const { isLoading, label } = getContinueButtonState();
+                      return (
+                        <button
+                          onClick={handleContinue}
+                          disabled={isLoading || isSaving}
+                          className="order-1 sm:order-2 w-full sm:w-auto bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white px-8 py-3 rounded-xl font-semibold hover:shadow-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
+                        >
+                          {isLoading ? (
+                            <>
+                              <Spinner size="xs" variant="white" />
+                              <span>{label}</span>
+                            </>
+                          ) : (
+                            <>
+                              <span>{label}</span>
+                              <ArrowRight className="w-4 h-4" />
+                            </>
+                          )}
+                        </button>
+                      );
+                    })()}
+                  </div>
+                ) : (
+                  (() => {
+                    const { isLoading, label } = getContinueButtonState();
+                    return (
+                      <button
+                        onClick={handleContinue}
+                        disabled={isLoading}
+                        className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white px-8 py-3 rounded-xl font-semibold hover:shadow-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+                      >
+                        {isLoading ? (
+                          <>
+                            <Spinner size="xs" variant="white" />
+                            <span>{label}</span>
+                          </>
+                        ) : (
+                          <>
+                            <span>{label}</span>
+                            <ArrowRight className="w-4 h-4" />
+                          </>
+                        )}
+                      </button>
+                    );
+                  })()
+                )}
               </div>
             )}
           </>

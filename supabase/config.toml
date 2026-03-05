@@ -1,0 +1,4 @@
+# Allow Facebook OAuth callback to hit this function without an Authorization header.
+# Facebook redirects the user's browser with ?code=...&state=... and no JWT.
+[functions.auth-facebook]
+verify_jwt = false
