@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate, useLocation, Link } from 'react-router-dom';
 import FacebookLogin from './FacebookLogin';
 import Spinner from './Spinner';
 import ThemeToggle from './ThemeToggle';
-import authService from '../auth/authService';
+import authService, { supabase } from '../auth/authService';
 import { promiseWithTimeout } from '../lib/asyncUtils';
 import { useVisibilityReset } from '../hooks/useVisibilityReset';
 
@@ -43,8 +43,37 @@ const Dashboard: React.FC<DashboardProps> = ({ onServerSelected, onLogout }) => 
   const [authError, setAuthError] = useState<string | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [authData, setAuthData] = useState<AuthData | null>(null);
+  const loggingOutRef = useRef(false);
 
-  useVisibilityReset(() => setIsLoading(false));
+  useVisibilityReset(() => {
+    setIsLoading(false);
+    if (isAuthenticated) {
+      promiseWithTimeout(
+        (async () => {
+          const result = await supabase.auth.getSession();
+          return result;
+        })(),
+        7000
+      ).then(({ data: { session } }) => {
+        if (session) {
+          const refreshedUser: UserProfile = {
+            id: session.user.id,
+            email: session.user.email,
+            name: session.user.user_metadata?.full_name || session.user.user_metadata?.name || session.user.email,
+            picture: session.user.user_metadata?.avatar_url || session.user.user_metadata?.picture,
+          };
+          setUserProfile(refreshedUser);
+          setAuthData(prev => prev ? { ...prev, access_token: session.access_token, user: refreshedUser } : prev);
+        } else {
+          setIsAuthenticated(false);
+          setUserProfile(null);
+          setAuthData(null);
+        }
+      }).catch(() => {
+        setAuthError((prev) => prev || 'Session refresh timed out. You can continue, or reload if this repeats.');
+      });
+    }
+  });
 
   const pathname = location.pathname;
 
@@ -56,24 +85,72 @@ const Dashboard: React.FC<DashboardProps> = ({ onServerSelected, onLogout }) => 
     }
   }, [location.state, navigate]);
 
-  // Single auth check - NO AUTH STATE LISTENER HERE
+  // Auth check on mount
   useEffect(() => {
+    // Check for OAuth callback errors in URL first (synchronous)
+    const params = new URLSearchParams(location.search);
+    const hashParams = new URLSearchParams((location.hash || '').replace(/^#/, ''));
+    const desc = params.get('error_description') || hashParams.get('error_description');
+    const errorCode = params.get('error') || hashParams.get('error');
+    if (desc || errorCode) {
+      const isEmailProviderError = desc?.includes('user email') && desc?.includes('external provider');
+      setAuthError(
+        isEmailProviderError
+          ? 'Facebook did not provide your email. Please ensure your Facebook account has a primary email, grant email permission when asked, then try again.'
+          : (desc || errorCode || 'Login failed. Please try again.')
+      );
+      window.history.replaceState({}, '', location.pathname);
+      setIsAuthenticated(false);
+      setUserProfile(null);
+      setAuthData(null);
+      setIsLoading(false);
+      return;
+    }
+
+    // Fast path: if stored auth exists, render immediately without blocking on network calls.
+    // This prevents the "stuck on checking authentication" issue when navigating back from tools.
+    const stored = authService.getStoredAuth();
+    if (stored?.access_token && stored?.user) {
+      setIsAuthenticated(true);
+      setUserProfile(stored.user);
+      setAuthData(stored);
+      setAuthError(null);
+      setIsLoading(false);
+
+      // Background validation (non-blocking) — only sign out if truly invalid
+      promiseWithTimeout(authService.checkAuthStatus(), 10000).then((status) => {
+        if (status.isAuthenticated) {
+          if (status.userData) setUserProfile(status.userData);
+          setAuthData(status.authData || status.userData);
+        } else if (status.error && status.error !== 'No stored authentication') {
+          setIsAuthenticated(false);
+          setUserProfile(null);
+          setAuthData(null);
+          setAuthError(status.error);
+        }
+      }).catch(() => {
+        // Network error during background check — keep user logged in
+      });
+      return;
+    }
+
+    // No stored auth — do a full async check with timeout (shows loading spinner)
     const checkAuth = async () => {
       try {
         setIsLoading(true);
         setAuthError(null);
 
-        const authStatus = await authService.checkAuthStatus();
-        
+        const authStatus = await promiseWithTimeout(authService.checkAuthStatus(), 10000);
+
         if (authStatus.isAuthenticated) {
           setIsAuthenticated(true);
-          setUserProfile(authStatus.userData);
+          if (authStatus.userData) setUserProfile(authStatus.userData);
           setAuthData(authStatus.authData || authStatus.userData);
         } else {
           setIsAuthenticated(false);
           setUserProfile(null);
           setAuthData(null);
-          
+
           if (authStatus.error && authStatus.error !== 'No stored authentication') {
             setAuthError(authStatus.error);
           }
@@ -83,7 +160,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onServerSelected, onLogout }) => 
         setUserProfile(null);
         setAuthData(null);
         setAuthError('Authentication check failed. Please try again.');
-        
+
         authService.clearAuth();
       } finally {
         setIsLoading(false);
@@ -93,21 +170,38 @@ const Dashboard: React.FC<DashboardProps> = ({ onServerSelected, onLogout }) => 
     checkAuth();
   }, []); // IMPORTANT: Empty dependency array to prevent loops
 
+  // Redirect logic (must be a hook BEFORE any early returns)
+  const needsAuthRedirect = !isLoading && isAuthenticated && (pathname === '/dashboard' || pathname === '/dashboard/');
+  const needsLoginRedirect = !isLoading && !isAuthenticated && pathname !== '/dashboard' && pathname !== '/dashboard/';
+
+  useEffect(() => {
+    if (loggingOutRef.current) {
+      loggingOutRef.current = false;
+      return;
+    }
+    if (needsAuthRedirect) {
+      navigate('/dashboard/server', { replace: true });
+    } else if (needsLoginRedirect) {
+      navigate('/dashboard', { replace: true });
+    }
+  }, [needsAuthRedirect, needsLoginRedirect, navigate]);
+
   const handleLogout = async () => {
+    loggingOutRef.current = true;
     try {
       setIsLoading(true);
-      
+
       await promiseWithTimeout(authService.logout(), 15000);
-      
+
       // Clear parent state (workspace selection)
       onLogout?.();
-      
+
       // Update local state
       setAuthData(null);
       setIsAuthenticated(false);
       setUserProfile(null);
       setAuthError(null);
-      
+
       navigate('/');
     } catch {
       // Force clear local state even if server logout failed
@@ -115,7 +209,6 @@ const Dashboard: React.FC<DashboardProps> = ({ onServerSelected, onLogout }) => 
       setAuthData(null);
       setIsAuthenticated(false);
       setUserProfile(null);
-      
       navigate('/');
     } finally {
       setIsLoading(false);
@@ -130,7 +223,7 @@ const Dashboard: React.FC<DashboardProps> = ({ onServerSelected, onLogout }) => 
     authService.clearAuth();
     setAuthData(null);
     
-    // The useEffect will automatically trigger auth check
+    setTimeout(() => setIsLoading(false), 3000);
     window.location.reload();
   };
 
@@ -191,27 +284,12 @@ const Dashboard: React.FC<DashboardProps> = ({ onServerSelected, onLogout }) => 
     );
   }
 
-  // Redirect authenticated users from /dashboard (or /dashboard/) to /dashboard/server
-  if (isAuthenticated && (pathname === '/dashboard' || pathname === '/dashboard/')) {
-    navigate('/dashboard/server', { replace: true });
+  if (needsAuthRedirect || needsLoginRedirect) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
         <div className="text-center">
           <Spinner size="md" className="mx-auto" />
           <p className="mt-4 text-gray-600 dark:text-gray-300">Redirecting...</p>
-        </div>
-      </div>
-    );
-  }
-
-  // Redirect unauthenticated users from dashboard sub-routes to /dashboard (login)
-  if (!isAuthenticated && pathname !== '/dashboard' && pathname !== '/dashboard/') {
-    navigate('/dashboard', { replace: true });
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">
-        <div className="text-center">
-          <Spinner size="md" className="mx-auto" />
-          <p className="mt-4 text-gray-600 dark:text-gray-300">Redirecting to login...</p>
         </div>
       </div>
     );
@@ -228,11 +306,17 @@ const Dashboard: React.FC<DashboardProps> = ({ onServerSelected, onLogout }) => 
               <div className="flex items-center justify-between w-full">
                 <div className="flex items-center gap-2 sm:gap-3 min-w-0">
                   {userProfile.picture && (
-                    <img
-                      src={userProfile.picture}
-                      alt={userProfile.name}
-                      className="w-8 h-8 sm:w-9 sm:h-9 rounded-full object-cover shrink-0"
-                    />
+                    <Link
+                      to="/dashboard"
+                      className="rounded-full shrink-0 ring-2 ring-transparent hover:ring-blue-300 dark:hover:ring-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                      aria-label="Go to dashboard"
+                    >
+                      <img
+                        src={userProfile.picture}
+                        alt={userProfile.name}
+                        className="w-8 h-8 sm:w-9 sm:h-9 rounded-full object-cover"
+                      />
+                    </Link>
                   )}
                   <div className="text-left min-w-0">
                     <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">{userProfile.name || userProfile.email}</p>
@@ -257,12 +341,15 @@ const Dashboard: React.FC<DashboardProps> = ({ onServerSelected, onLogout }) => 
 
         <FacebookLogin 
           onServerSelected={onServerSelected} 
-          initialAuthData={authData}
+          initialAuthData={(
+            authData?.user?.id
+              ? { user: { id: authData.user.id } }
+              : undefined
+          )}
           pathname={pathname}
           backToState={(() => {
             const rawState = location.state as { backToStep?: string; serverId?: string; businessId?: string; adAccountId?: string } | undefined;
             const flag = sessionStorage.getItem(BACK_TO_PAGE_FLAG);
-            // Pass state when flag is set; FacebookLogin removes flag after restore so we don't pass undefined on the next render
             const backToState = rawState?.backToStep === 'page' && flag === '1'
               ? rawState
               : rawState?.backToStep === 'page'
@@ -279,7 +366,6 @@ const Dashboard: React.FC<DashboardProps> = ({ onServerSelected, onLogout }) => 
   return (
     <FacebookLogin 
       onServerSelected={onServerSelected} 
-      initialAuthData={null}
       pathname={pathname}
     />
   );

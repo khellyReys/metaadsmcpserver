@@ -1,8 +1,10 @@
-import React, { useState, useEffect } from 'react';
-import { ArrowRight, Plus, Server, X, AlertCircle, Trash2 } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { ArrowRight, Plus, Server, X, AlertCircle, Trash2, KeyRound, Building2, CreditCard, FileText, Copy, Check, Info } from 'lucide-react';
 import Spinner from './Spinner';
+import CredentialsModal from './CredentialsModal';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { fetchWithTimeout, promiseWithTimeout } from '../lib/asyncUtils';
+import { getEnvVar } from '../lib/env';
 import { useVisibilityReset } from '../hooks/useVisibilityReset';
 
 interface BusinessAccount {
@@ -13,12 +15,25 @@ interface BusinessAccount {
   adAccountsCount: number;
 }
 
+interface ServerSettings {
+  last_workspace?: {
+    business_id?: string;
+    business_name?: string;
+    ad_account_id?: string;
+    ad_account_name?: string;
+    page_id?: string;
+    page_name?: string;
+  };
+}
+
 interface Server {
   id: string;
   name: string;
   access_token: string;
   created_at: string;
   is_active: boolean;
+  settings?: ServerSettings;
+  description?: string | null;
 }
 
 interface ServerManagementStepProps {
@@ -32,8 +47,15 @@ interface ServerManagementStepProps {
   onClearError: () => void;
   supabase: SupabaseClient;
   facebookAccessToken: string;
-  // Updated interface to match the new flow
   onCompleteServerSelection: (serverId: string, businessAccounts: BusinessAccount[]) => void;
+  onRefreshServers?: () => Promise<void>;
+  onContinueWithLastWorkspace?: (
+    serverId: string,
+    businessId: string,
+    adAccountId: string,
+    pageId: string,
+    serverAccessToken: string
+  ) => void;
 }
 
 export default function ServerManagementStep({
@@ -45,10 +67,13 @@ export default function ServerManagementStep({
   onClearError,
   supabase,
   facebookAccessToken,
-  onCompleteServerSelection
+  onCompleteServerSelection,
+  onRefreshServers,
+  onContinueWithLastWorkspace
 }: ServerManagementStepProps) {
   const [showServerModal, setShowServerModal] = useState(false);
   const [serverName, setServerName] = useState('');
+  const [serverDescription, setServerDescription] = useState('');
   const [isCreatingServer, setIsCreatingServer] = useState(false);
   
   // Loading state for server selection
@@ -59,6 +84,31 @@ export default function ServerManagementStep({
   const [loadingErrorServerId, setLoadingErrorServerId] = useState<string | null>(null);
   const [deletingServerId, setDeletingServerId] = useState<string | null>(null);
   const [serverToDelete, setServerToDelete] = useState<Server | null>(null);
+  const [createServerError, setCreateServerError] = useState('');
+  const [credentialsServer, setCredentialsServer] = useState<Server | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const timerRefs = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const supabaseUrl = getEnvVar('VITE_SUPABASE_URL');
+  const supabaseAnonKey = getEnvVar('VITE_SUPABASE_ANON_KEY');
+
+  useEffect(() => {
+    return () => { timerRefs.current.forEach(clearTimeout); };
+  }, []);
+
+  const safeTimeout = (fn: () => void, ms: number) => {
+    const id = setTimeout(() => {
+      timerRefs.current = timerRefs.current.filter(t => t !== id);
+      fn();
+    }, ms);
+    timerRefs.current.push(id);
+    return id;
+  };
+
+  const copyId = async (id: string, key: string) => {
+    try { await navigator.clipboard.writeText(id); } catch { /* fallback */ }
+    setCopiedId(key);
+    safeTimeout(() => setCopiedId(null), 1500);
+  };
 
   useVisibilityReset(() => {
     setLoadingServerId('');
@@ -68,51 +118,194 @@ export default function ServerManagementStep({
     setLoadingErrorServerId(null);
     setIsCreatingServer(false);
     setDeletingServerId(null);
+    setCreateServerError('');
   });
+
+  const ensureSessionReady = async (): Promise<string> => {
+    try {
+      const result = await promiseWithTimeout(supabase.auth.getSession(), 2000);
+      const { data, error: sessionError } = result;
+      const sessionUserId = data?.session?.user?.id;
+      if (sessionError || !sessionUserId) {
+        if (currentUser?.id) return currentUser.id;
+        throw new Error('Session is not ready yet. Please wait a moment and try again.');
+      }
+      return sessionUserId;
+    } catch (e) {
+      if (currentUser?.id) return currentUser.id;
+      throw e;
+    }
+  };
+
+  const getStoredAccessToken = (): string | null => {
+    try {
+      const raw = localStorage.getItem('authData');
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as { access_token?: string };
+      return parsed?.access_token || null;
+    } catch {
+      return null;
+    }
+  };
+
+  const rpcViaRest = async <T,>(fn: string, payload: Record<string, unknown>, timeoutMs: number): Promise<T> => {
+    const token = getStoredAccessToken();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (supabaseAnonKey) headers.apikey = supabaseAnonKey;
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const response = await fetchWithTimeout(`${supabaseUrl}/rest/v1/rpc/${fn}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+      timeoutMs,
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`RPC ${fn} failed (${response.status}): ${text.slice(0, 200)}`);
+    }
+    if (!text) return null as T;
+    return JSON.parse(text) as T;
+  };
+
+  // Resolve missing business/ad account/page names from Graph API and persist so all server cards show names.
+  const backfillMissingNamesRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!facebookAccessToken || !onRefreshServers || servers.length === 0) return;
+    const needsBackfill = servers.filter((server) => {
+      const ws = server.settings?.last_workspace;
+      if (!ws?.business_id || !ws?.ad_account_id || !ws?.page_id) return false;
+      const missing = !ws.business_name || !ws.ad_account_name || !ws.page_name;
+      if (!missing) return false;
+      if (backfillMissingNamesRef.current.has(server.id)) return false;
+      return true;
+    });
+    if (needsBackfill.length === 0) return;
+    (async () => {
+      for (const server of needsBackfill) {
+        backfillMissingNamesRef.current.add(server.id);
+        const ws = server.settings?.last_workspace!;
+        let business_name = ws.business_name ?? '';
+        let ad_account_name = ws.ad_account_name ?? '';
+        let page_name = ws.page_name ?? '';
+        const token = encodeURIComponent(facebookAccessToken);
+        try {
+          if (!business_name && ws.business_id) {
+            const r = await fetchWithTimeout(
+              `https://graph.facebook.com/v18.0/${encodeURIComponent(ws.business_id)}?fields=name&access_token=${token}`,
+              { timeoutMs: 10000 }
+            );
+            const d = await r.json();
+            if (d?.name) business_name = d.name;
+          }
+          if (!ad_account_name && ws.ad_account_id) {
+            const adId = String(ws.ad_account_id).startsWith('act_') ? ws.ad_account_id : `act_${ws.ad_account_id}`;
+            const r = await fetchWithTimeout(
+              `https://graph.facebook.com/v18.0/${encodeURIComponent(adId)}?fields=name&access_token=${token}`,
+              { timeoutMs: 10000 }
+            );
+            const d = await r.json();
+            if (d?.name) ad_account_name = d.name;
+          }
+          if (!page_name && ws.page_id) {
+            const r = await fetchWithTimeout(
+              `https://graph.facebook.com/v18.0/${encodeURIComponent(ws.page_id)}?fields=name&access_token=${token}`,
+              { timeoutMs: 10000 }
+            );
+            const d = await r.json();
+            if (d?.name) page_name = d.name;
+          }
+          if (business_name || ad_account_name || page_name) {
+            await rpcViaRest('update_server_settings', {
+              p_server_id: server.id,
+              p_settings: {
+                last_workspace: {
+                  business_id: ws.business_id,
+                  business_name: business_name || ws.business_name,
+                  ad_account_id: ws.ad_account_id,
+                  ad_account_name: ad_account_name || ws.ad_account_name,
+                  page_id: ws.page_id,
+                  page_name: page_name || ws.page_name,
+                },
+              },
+            }, 12000);
+            onRefreshServers().catch(() => {});
+          }
+        } catch {
+          backfillMissingNamesRef.current.delete(server.id);
+        }
+      }
+    })();
+  }, [servers, facebookAccessToken, onRefreshServers]);
 
   const handleCreateServer = async () => {
     if (!serverName.trim() || !currentUser) return;
+    const trimmedServerName = serverName.trim();
+    const trimmedDescription = serverDescription.trim();
 
     setIsCreatingServer(true);
+    setCreateServerError('');
     onClearError();
 
     try {
-      const { data: serverData, error: serverError } = await promiseWithTimeout(
+      const activeUserId = await ensureSessionReady();
+      const { data: serverData } = await promiseWithTimeout(
         (async () => {
-          const r = await supabase.rpc('create_server_with_session', {
-            p_user_id: currentUser.id,
-            p_server_name: serverName.trim(),
-            p_description: null,
+          const data = await rpcViaRest<unknown>('create_server_with_session', {
+            p_user_id: activeUserId,
+            p_server_name: trimmedServerName,
+            p_description: trimmedDescription || null,
             p_expires_hours: 24 * 30 // 30 days
-          });
-          return r;
+          }, 30000);
+          return { data, error: null };
         })(),
-        25000
+        90000
       );
 
-      if (serverError) {
-        throw new Error('Failed to create server: ' + serverError.message);
-      }
-
-      if (!serverData || serverData.length === 0) {
+      if (!serverData || (Array.isArray(serverData) && serverData.length === 0)) {
         throw new Error('No server data returned');
       }
 
-      const newServerData = serverData[0];
+      const newServerData = Array.isArray(serverData) ? serverData[0] : serverData;
+      const newServerId = newServerData.server_id;
       const newServer: Server = {
-        id: newServerData.server_id,
-        name: serverName,
+        id: newServerId,
+        name: trimmedServerName,
         access_token: newServerData.session_token,
         created_at: new Date().toISOString(),
-        is_active: true
+        is_active: true,
+        description: trimmedDescription || undefined
       };
 
       onServerCreated(newServer);
+      if (onRefreshServers) {
+        void onRefreshServers().catch(() => {});
+      }
       setServerName('');
+      setServerDescription('');
       setShowServerModal(false);
 
-    } catch {
-      // Error will be handled by parent component
+      if (trimmedDescription) {
+        void supabase.rpc('update_server_description', {
+          p_server_id: newServerId,
+          p_description: trimmedDescription
+        });
+      }
+
+      handleSelectServer(newServerId);
+
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to create server';
+      const isTimeout = msg.includes('timed out');
+      if (isTimeout && onRefreshServers) {
+        void onRefreshServers().catch(() => {});
+      }
+      setCreateServerError(
+        isTimeout
+          ? 'Create request timed out. We refreshed your servers list automatically. If it is still missing, try creating again.'
+          : msg
+      );
     } finally {
       setIsCreatingServer(false);
     }
@@ -123,23 +316,27 @@ export default function ServerManagementStep({
     setDeletingServerId(serverId);
     onClearError();
     try {
-      const { error: deleteError } = await promiseWithTimeout(
+      await ensureSessionReady();
+      await promiseWithTimeout(
         (async () => {
-          const r = await supabase.rpc('delete_server', { p_server_id: serverId });
-          return r;
+          await rpcViaRest<unknown>('delete_server', { p_server_id: serverId }, 20000);
+          return { error: null };
         })(),
-        15000
+        45000
       );
-      if (deleteError) {
-        throw new Error(deleteError.message);
-      }
       onServerDeleted(serverId);
+      if (onRefreshServers) {
+        void onRefreshServers().catch(() => {});
+      }
       setServerToDelete(null);
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Failed to delete server';
+      if (msg.includes('timed out') && onRefreshServers) {
+        void onRefreshServers().catch(() => {});
+      }
       onClearError();
       setLoadingError(msg);
-      setTimeout(() => setLoadingError(''), 3000);
+      safeTimeout(() => setLoadingError(''), 3000);
     } finally {
       setDeletingServerId(null);
     }
@@ -244,7 +441,7 @@ export default function ServerManagementStep({
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       setLoadingError(`Failed to load business accounts: ${errorMessage}. Please logout and try again!`);
       setLoadingErrorServerId(serverId);
-      setTimeout(() => {
+      safeTimeout(() => {
         setLoadingError('');
         setLoadingErrorServerId(null);
       }, 8000);
@@ -347,6 +544,8 @@ export default function ServerManagementStep({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {servers.map((server) => {
                 const isLoading = loadingServerId === server.id;
+                const ws = server.settings?.last_workspace;
+                const isFullyConfigured = !!(ws?.business_id && ws?.ad_account_id && ws?.page_id);
                 
                 return (
                   <div
@@ -355,20 +554,43 @@ export default function ServerManagementStep({
                   >
                     <div className="flex items-start justify-between mb-4">
                       <div className="flex items-center space-x-3">
-                        <div className="w-12 h-12 bg-gradient-to-br from-green-100 to-blue-100 dark:from-green-900/30 dark:to-blue-900/30 rounded-lg flex items-center justify-center">
-                          <Server className="w-6 h-6 text-blue-600 dark:text-blue-400" />
+                        <div className={`w-12 h-12 bg-gradient-to-br ${isFullyConfigured ? 'from-green-100 to-blue-100 dark:from-green-900/30 dark:to-blue-900/30' : 'from-amber-100 to-orange-100 dark:from-amber-900/30 dark:to-orange-900/30'} rounded-lg flex items-center justify-center`}>
+                          <Server className={`w-6 h-6 ${isFullyConfigured ? 'text-blue-600 dark:text-blue-400' : 'text-amber-600 dark:text-amber-400'}`} />
                         </div>
                         <div>
                           <h3 className="font-semibold text-gray-900 dark:text-gray-100">{server.name}</h3>
-                          <p className="text-sm text-gray-500 dark:text-gray-400">
+                          <p className="text-sm text-gray-500 dark:text-gray-400 flex items-center gap-1">
                             Created {new Date(server.created_at).toLocaleDateString()}
+                            {server.description?.trim() ? (
+                              <span
+                                className="inline-flex text-gray-400 dark:text-gray-500 hover:text-blue-600 dark:hover:text-blue-400 cursor-help"
+                                title={server.description.trim()}
+                              >
+                                <Info className="w-3.5 h-3.5 shrink-0" aria-hidden />
+                              </span>
+                            ) : null}
                           </p>
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
-                        <span className="px-2 py-1 rounded-full text-xs font-medium bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400">
-                          Active
-                        </span>
+                        {isFullyConfigured ? (
+                          <span className="px-2 py-1 rounded-full text-xs font-medium bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400">
+                            Active
+                          </span>
+                        ) : (
+                          <span className="px-2 py-1 rounded-full text-xs font-medium bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400">
+                            Draft
+                          </span>
+                        )}
+                        <button
+                          onClick={() => setCredentialsServer(server)}
+                          disabled={isLoading || loadingServerId !== ''}
+                          className="p-1 text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          title="View credentials"
+                          aria-label="View credentials"
+                        >
+                          <KeyRound className="w-4 h-4" />
+                        </button>
                         <button
                           onClick={() => setServerToDelete(server)}
                           disabled={isLoading || loadingServerId !== '' || deletingServerId === server.id}
@@ -385,11 +607,65 @@ export default function ServerManagementStep({
                       </div>
                     </div>
 
-                    <div className="mb-4">
-                      <p className="text-sm text-gray-600 dark:text-gray-400 font-medium mb-1">Server ID:</p>
-                      <code className="text-xs bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded font-mono break-all text-gray-800 dark:text-gray-200">
-                        {server.id}
-                      </code>
+                    {/* Connected Setup */}
+                    <div className="mb-4 space-y-1.5">
+                      <div>
+                        <p className="text-sm font-semibold text-gray-600 dark:text-gray-300 mb-0.5 flex items-center gap-1.5">
+                          <Building2 className="w-3.5 h-3.5" />
+                          Business ID
+                        </p>
+                        {ws?.business_id ? (
+                          <div className="flex items-center justify-between gap-2 text-xs pl-5">
+                            <span className="text-gray-700 dark:text-gray-300 truncate">{ws.business_name || ws.business_id}</span>
+                            <span className="flex items-center gap-1 flex-shrink-0">
+                              {ws.business_name && <span className="text-xs text-gray-400 dark:text-gray-500 font-mono">{ws.business_id}</span>}
+                              <button onClick={() => copyId(ws.business_id!, `biz-${server.id}`)} className="p-0.5 text-gray-400 hover:text-blue-500 dark:text-gray-500 dark:hover:text-blue-400 transition-colors" title="Copy ID">
+                                {copiedId === `biz-${server.id}` ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3" />}
+                              </button>
+                            </span>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-gray-400 dark:text-gray-500 italic pl-5">Not connected</p>
+                        )}
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold text-gray-600 dark:text-gray-300 mb-0.5 flex items-center gap-1.5">
+                          <CreditCard className="w-3.5 h-3.5" />
+                          Ad Account ID
+                        </p>
+                        {ws?.ad_account_id ? (
+                          <div className="flex items-center justify-between gap-2 text-xs pl-5">
+                            <span className="text-gray-700 dark:text-gray-300 truncate">{ws.ad_account_name || ws.ad_account_id}</span>
+                            <span className="flex items-center gap-1 flex-shrink-0">
+                              {ws.ad_account_name && <span className="text-xs text-gray-400 dark:text-gray-500 font-mono">{ws.ad_account_id}</span>}
+                              <button onClick={() => copyId(ws.ad_account_id!, `ad-${server.id}`)} className="p-0.5 text-gray-400 hover:text-blue-500 dark:text-gray-500 dark:hover:text-blue-400 transition-colors" title="Copy ID">
+                                {copiedId === `ad-${server.id}` ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3" />}
+                              </button>
+                            </span>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-gray-400 dark:text-gray-500 italic pl-5">Not connected</p>
+                        )}
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold text-gray-600 dark:text-gray-300 mb-0.5 flex items-center gap-1.5">
+                          <FileText className="w-3.5 h-3.5" />
+                          Page ID
+                        </p>
+                        {ws?.page_id ? (
+                          <div className="flex items-center justify-between gap-2 text-xs pl-5">
+                            <span className="text-gray-700 dark:text-gray-300 truncate">{ws.page_name || ws.page_id}</span>
+                            <span className="flex items-center gap-1 flex-shrink-0">
+                              {ws.page_name && <span className="text-xs text-gray-400 dark:text-gray-500 font-mono">{ws.page_id}</span>}
+                              <button onClick={() => copyId(ws.page_id!, `page-${server.id}`)} className="p-0.5 text-gray-400 hover:text-blue-500 dark:text-gray-500 dark:hover:text-blue-400 transition-colors" title="Copy ID">
+                                {copiedId === `page-${server.id}` ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3" />}
+                              </button>
+                            </span>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-gray-400 dark:text-gray-500 italic pl-5">Not connected</p>
+                        )}
+                      </div>
                     </div>
 
                     {/* Enhanced Select Button with Progress */}
@@ -432,16 +708,34 @@ export default function ServerManagementStep({
                         )}
                       </div>
                     ) : (
-                      <div className="w-full">
+                      <div className="w-full space-y-2">
+                        {onContinueWithLastWorkspace && (
+                          <button
+                            type="button"
+                            disabled={!isFullyConfigured}
+                            onClick={() =>
+                              onContinueWithLastWorkspace(
+                                server.id,
+                                ws?.business_id ?? '',
+                                ws?.ad_account_id ?? '',
+                                ws?.page_id ?? '',
+                                server.access_token
+                              )
+                            }
+                            className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white py-2 px-4 rounded-lg transition-all flex items-center justify-center space-x-2 text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            <span>Open Tools</span>
+                            <ArrowRight className="w-4 h-4" />
+                          </button>
+                        )}
                         <button
                           onClick={() => handleSelectServer(server.id)}
                           disabled={loadingServerId !== ''}
-                          className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded-lg transition-colors flex items-center justify-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="w-full py-2 px-4 rounded-lg transition-colors flex items-center justify-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed text-sm bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200"
                         >
-                          <span>Select Server</span>
+                          <span>{isFullyConfigured ? 'Reconfigure' : 'Configure Server'}</span>
                           <ArrowRight className="w-4 h-4" />
                         </button>
-                        {/* Show error below button when loading was cleared by finally but error is still in state */}
                         {loadingError && loadingErrorServerId === server.id && (
                           <div className="mt-2 p-2 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
                             <p className="text-xs text-red-600 dark:text-red-400">{loadingError}</p>
@@ -523,7 +817,7 @@ export default function ServerManagementStep({
                 </button>
               </div>
 
-              <div className="mb-6">
+              <div className="mb-4">
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                   Server Name
                 </label>
@@ -535,10 +829,29 @@ export default function ServerManagementStep({
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400"
                 />
               </div>
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Description <span className="text-gray-500 font-normal">(optional)</span>
+                </label>
+                <textarea
+                  value={serverDescription}
+                  onChange={(e) => setServerDescription(e.target.value)}
+                  placeholder="e.g., Production ads for Brand X"
+                  rows={2}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400 resize-none"
+                />
+              </div>
+
+              {createServerError && (
+                <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg flex items-start space-x-2">
+                  <AlertCircle className="w-4 h-4 text-red-500 dark:text-red-400 mt-0.5 flex-shrink-0" />
+                  <p className="text-sm text-red-700 dark:text-red-300">{createServerError}</p>
+                </div>
+              )}
 
               <div className="flex space-x-3">
                 <button
-                  onClick={() => setShowServerModal(false)}
+                  onClick={() => { setShowServerModal(false); setCreateServerError(''); }}
                   className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                 >
                   Cancel
@@ -563,6 +876,16 @@ export default function ServerManagementStep({
               </div>
             </div>
           </div>
+        )}
+
+        {/* Credentials Modal */}
+        {credentialsServer && (
+          <CredentialsModal
+            serverId={credentialsServer.id}
+            serverAccessToken={credentialsServer.access_token}
+            isOpen={true}
+            onClose={() => setCredentialsServer(null)}
+          />
         )}
       </div>
     </div>

@@ -1,17 +1,20 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 
 /**
  * When the tab becomes visible again, call onVisible.
- * Use this to clear stuck loading state after the user returns from an inactive tab.
+ * Uses a ref so the listener is registered only once regardless of callback identity.
  */
 export function useVisibilityReset(onVisible: () => void): void {
+  const callbackRef = useRef(onVisible);
+  callbackRef.current = onVisible;
+
   useEffect(() => {
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') {
-        onVisible();
+        callbackRef.current();
       }
     };
     document.addEventListener('visibilitychange', handleVisibility);
     return () => document.removeEventListener('visibilitychange', handleVisibility);
-  }, [onVisible]);
+  }, []);
 }

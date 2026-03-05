@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { supabase } from '../auth/authService';
+import authService, { supabase } from '../auth/authService';
 import { getEnvVar } from '../lib/env';
 import { fetchWithTimeout, promiseWithTimeout } from '../lib/asyncUtils';
 import { useVisibilityReset } from '../hooks/useVisibilityReset';
@@ -16,12 +16,25 @@ interface BusinessAccount {
   adAccountsCount: number;
 }
 
+interface ServerSettings {
+  last_workspace?: {
+    business_id?: string;
+    business_name?: string;
+    ad_account_id?: string;
+    ad_account_name?: string;
+    page_id?: string;
+    page_name?: string;
+  };
+}
+
 interface Server {
   id: string;
   name: string;
   access_token: string;
   created_at: string;
   is_active: boolean;
+  settings?: ServerSettings;
+  description?: string | null;
 }
 
 interface FacebookLoginProps {
@@ -76,32 +89,119 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
   const [selectedBusiness, setSelectedBusiness] = useState<string>('');
 
   const restoreToPageAttempted = useRef(false);
+  const initialAuthDataRef = useRef(initialAuthData);
+  initialAuthDataRef.current = initialAuthData;
+  /** Set when init auth effect's async has finished; prevents showing reconnect while token is still loading from DB. */
+  const initAuthResolvedRef = useRef(false);
+  const supabaseUrlEnv = getEnvVar('VITE_SUPABASE_URL');
+  const supabaseAnonKeyEnv = getEnvVar('VITE_SUPABASE_ANON_KEY');
 
   useVisibilityReset(() => setIsLoading(false));
 
   const FACEBOOK_TOKEN_BUFFER_MS = 5 * 60 * 1000; // 5 minutes
 
   const checkFacebookTokenStatus = async (): Promise<'valid' | 'expired'> => {
-    const { data, error: rpcError } = await supabase.rpc('get_my_facebook_token_status');
-    if (rpcError || !data) return 'expired';
-    const hasToken = data?.has_token === true;
-    const expiresAt = data?.expires_at;
-    if (!hasToken || !expiresAt) return 'expired';
-    const expirationTime = new Date(expiresAt).getTime();
-    const now = Date.now();
-    if (expirationTime - FACEBOOK_TOKEN_BUFFER_MS <= now) return 'expired';
-    return 'valid';
+    try {
+      const { data, error: rpcError } = await promiseWithTimeout(
+        (async () => {
+          const result = await supabase.rpc('get_my_facebook_token_status');
+          return result;
+        })(),
+        6000
+      );
+      if (rpcError || !data) return 'expired';
+      const hasToken = data?.has_token === true;
+      const expiresAt = data?.expires_at;
+      if (!hasToken || !expiresAt) return 'expired';
+      const expirationTime = new Date(expiresAt).getTime();
+      const now = Date.now();
+      if (expirationTime - FACEBOOK_TOKEN_BUFFER_MS <= now) return 'expired';
+      return 'valid';
+    } catch {
+      return 'expired';
+    }
+  };
+
+  const getStoredAccessToken = (): string | null => {
+    try {
+      const raw = localStorage.getItem('authData');
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as { access_token?: string };
+      return parsed?.access_token || null;
+    } catch {
+      return null;
+    }
+  };
+
+  const rpcViaRest = async <T,>(fn: string, payload: Record<string, unknown>, timeoutMs: number): Promise<T> => {
+    const token = getStoredAccessToken();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (supabaseAnonKeyEnv) headers.apikey = supabaseAnonKeyEnv;
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    const response = await fetchWithTimeout(`${supabaseUrlEnv}/rest/v1/rpc/${fn}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+      timeoutMs
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`RPC ${fn} failed (${response.status}): ${text.slice(0, 200)}`);
+    }
+    if (!text) return null as T;
+    return JSON.parse(text) as T;
+  };
+
+  const runRpcWithFallback = async <T,>(
+    fn: string,
+    payload: Record<string, unknown>,
+    timeoutMs: number
+  ): Promise<{ data: T | null; error: { message: string } | null }> => {
+    try {
+      const sdkResult = await promiseWithTimeout(
+        (async () => {
+          const result = await supabase.rpc(fn, payload);
+          return result;
+        })(),
+        timeoutMs
+      );
+      if (!sdkResult.error) {
+        return { data: (sdkResult.data as T) ?? null, error: null };
+      }
+    } catch {
+      // Fall through to REST fallback.
+    }
+
+    try {
+      const data = await rpcViaRest<T>(fn, payload, timeoutMs);
+      return { data, error: null };
+    } catch (e) {
+      return { error: { message: e instanceof Error ? e.message : `RPC ${fn} failed` }, data: null };
+    }
   };
 
   /** Prefer long-lived token from DB so the frontend doesn't use short-lived session.provider_token. */
   const loadLongLivedTokenFromDb = async (userId: string): Promise<string | null> => {
-    const { data, error } = await supabase
-      .from('users')
-      .select('facebook_long_lived_token, facebook_access_token')
-      .eq('id', userId)
-      .maybeSingle();
-    if (error) return null;
-    return data?.facebook_long_lived_token || data?.facebook_access_token || null;
+    try {
+      const { data, error } = await promiseWithTimeout(
+        (async () => {
+          const result = await supabase
+            .from('users')
+            .select('facebook_long_lived_token, facebook_access_token')
+            .eq('id', userId)
+            .maybeSingle();
+          return result;
+        })(),
+        6000
+      );
+      if (error) return null;
+      return data?.facebook_long_lived_token || data?.facebook_access_token || null;
+    } catch {
+      return null;
+    }
   };
 
   // Restore to Page selection step when returning from Tools ("Back to page")
@@ -185,73 +285,102 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
   }, [backToState, currentUser, facebookAccessToken]);
 
   // Initialize auth state and handle initial auth data; gate on Facebook token expiry
+  // Depend on user id (stable primitive) instead of the full object to avoid re-runs on reference changes.
+  const initialAuthUserId = initialAuthData?.user?.id;
   useEffect(() => {
-    if (!initialAuthData) return;
+    const authData = initialAuthDataRef.current;
+    if (!authData) return;
 
-    setCurrentUser(initialAuthData.user);
-    setUserSession(initialAuthData.session);
+    setCurrentUser(authData.user);
+    setUserSession(authData.session ?? null);
 
-    // provider_token lives at top-level (authService shape) or inside session (interface shape)
+    // Optimistically mark token as valid so the gate doesn't block.
+    // Dashboard already verified auth; async work below will correct to 'expired' if needed.
+    setFacebookTokenStatus('valid');
+
     const providerToken =
-      (initialAuthData as Record<string, unknown>).provider_token as string | undefined ||
-      initialAuthData.session?.provider_token;
+      (authData as Record<string, unknown>).provider_token as string | undefined ||
+      authData.session?.provider_token;
 
     let mounted = true;
+    initAuthResolvedRef.current = false;
     (async () => {
-      const longLived = await loadLongLivedTokenFromDb(initialAuthData.user.id);
-      if (mounted) {
-        if (longLived) {
-          setFacebookAccessToken(longLived);
-        } else {
-          const token =
-            initialAuthData.facebookToken ||
-            providerToken ||
-            initialAuthData.session?.access_token;
-          setFacebookAccessToken(token || '');
+      try {
+        const longLived = await loadLongLivedTokenFromDb(authData.user.id);
+        if (mounted) {
+          if (longLived) {
+            setFacebookAccessToken(longLived);
+          } else {
+            const token =
+              authData.facebookToken ||
+              providerToken ||
+              authData.session?.access_token;
+            setFacebookAccessToken(token || '');
+          }
         }
-      }
 
-      // Fresh OAuth sign-in: provider_token present means old DB status is stale,
-      // skip the DB check and proceed directly.
-      if (providerToken) {
+        if (providerToken) {
+          if (!mounted) return;
+          await loadUserServersBestEffort(authData.user.id);
+          if (!mounted || restoreToPageAttempted.current) return;
+          navigate('/dashboard/server');
+          return;
+        }
+
+        // When we have a token from DB, trust it — don't overwrite with RPC result (avoids reconnect every time).
+        if (longLived) {
+          if (!mounted) return;
+          await loadUserServersBestEffort(authData.user.id);
+          if (!mounted || restoreToPageAttempted.current) return;
+          navigate('/dashboard/server');
+          return;
+        }
+
+        const status = await checkFacebookTokenStatus();
         if (!mounted) return;
-        setFacebookTokenStatus('valid');
-        await loadUserServers(initialAuthData.user.id);
+        setFacebookTokenStatus(status);
+        if (status === 'expired') return;
+        await loadUserServersBestEffort(authData.user.id);
         if (!mounted || restoreToPageAttempted.current) return;
         navigate('/dashboard/server');
-        return;
+      } finally {
+        if (mounted) initAuthResolvedRef.current = true;
       }
-
-      const status = await checkFacebookTokenStatus();
-      if (!mounted) return;
-      setFacebookTokenStatus(status);
-      if (status === 'expired') return;
-      await loadUserServers(initialAuthData.user.id);
-      if (!mounted || restoreToPageAttempted.current) return;
-      navigate('/dashboard/server');
     })();
-    return () => {
-      mounted = false;
-    };
-  }, [initialAuthData]);
+    return () => { mounted = false; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialAuthUserId]);
 
   // Session management
   useEffect(() => {
     let mounted = true;
 
     const checkSession = async () => {
+      setError('');
       setIsLoading(true);
       try {
         await promiseWithTimeout(
           (async () => {
-            const { data: { session }, error } = await supabase.auth.getSession();
+            let session: Awaited<ReturnType<typeof supabase.auth.getSession>>['data']['session'];
+            let error: Awaited<ReturnType<typeof supabase.auth.getSession>>['error'] | null = null;
+            try {
+              const result = await supabase.auth.getSession();
+              session = result.data?.session ?? null;
+              error = result.error ?? null;
+            } catch (getSessionError) {
+              // getSession() can throw when localStorage is blocked (e.g. private browsing) or client fails
+              if (mounted) {
+                setError('Could not read session. Please sign in again or disable blocking for this site.');
+              }
+              return;
+            }
             if (error) {
               setError('Failed to retrieve session. Please try logging in again.');
               return;
             }
             if (session?.user && mounted) {
               setCurrentUser(session.user);
-              setUserSession(session);
+              setUserSession(session ? { provider_token: session.provider_token ?? undefined } : null);
               const longLived = await loadLongLivedTokenFromDb(session.user.id);
               if (longLived) {
                 setFacebookAccessToken(longLived);
@@ -261,23 +390,30 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
 
               // Fresh OAuth sign-in: provider_token present means old DB status is stale,
               // skip the DB check and proceed directly with token exchange.
-              if (session.provider_token) {
+              const sessionForProcess = session ? { user: session.user, provider_token: session.provider_token ?? undefined } : null;
+              if (session.provider_token && sessionForProcess) {
                 setFacebookTokenStatus('valid');
-                await processAuthenticatedUser(session);
+                await processAuthenticatedUser(sessionForProcess);
               } else {
                 const tokenStatus = await checkFacebookTokenStatus();
                 if (!mounted) return;
                 setFacebookTokenStatus(tokenStatus);
                 if (tokenStatus === 'expired') return;
-                await processAuthenticatedUser(session);
+                if (sessionForProcess) await processAuthenticatedUser(sessionForProcess);
               }
             }
           })(),
           25000
         );
-      } catch {
+      } catch (e) {
         if (mounted) {
-          setError('Failed to initialize session. Please refresh the page.');
+          const msg = e instanceof Error ? e.message : String(e);
+          const isTimeout = /timed out|timeout/i.test(msg);
+          setError(
+            isTimeout
+              ? 'Session check timed out. Please refresh the page or check your connection.'
+              : `Session error: ${msg}. Please refresh the page.`
+          );
         }
       } finally {
         if (mounted) {
@@ -291,7 +427,7 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
       try {
         if (event === 'SIGNED_IN' && session?.user && mounted) {
           setCurrentUser(session.user);
-          setUserSession(session);
+          setUserSession(session ? { provider_token: session.provider_token ?? undefined } : null);
           const longLived = await loadLongLivedTokenFromDb(session.user.id);
           if (longLived) {
             setFacebookAccessToken(longLived);
@@ -299,15 +435,15 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
             setFacebookAccessToken(session.provider_token);
           }
           setFacebookTokenStatus('valid');
-          await processAuthenticatedUser(session);
+          await processAuthenticatedUser({ user: session.user, provider_token: session.provider_token ?? undefined });
         } else if (event === 'SIGNED_OUT' && mounted) {
           setCurrentUser(null);
           setUserSession(null);
           setFacebookAccessToken('');
           setFacebookTokenStatus('unknown');
-          navigate('/dashboard');
+          navigate('/');
         } else if (event === 'TOKEN_REFRESHED' && session?.user && mounted) {
-          setUserSession(session);
+          setUserSession(session ? { provider_token: session.provider_token ?? undefined } : null);
           const longLived = await loadLongLivedTokenFromDb(session.user.id);
           if (longLived) {
             setFacebookAccessToken(longLived);
@@ -322,7 +458,11 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
       }
     });
 
-    checkSession();
+    // Skip checkSession when initialAuthData is provided — initAuthEffect handles that case.
+    // checkSession is only needed for cold starts (page refresh / direct navigation).
+    if (!initialAuthDataRef.current) {
+      checkSession();
+    }
 
     return () => {
       mounted = false;
@@ -344,35 +484,47 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
 
       await exchangeTokenAndSaveUser(session.provider_token, facebookData, user);
       setFacebookTokenStatus('valid');
-      await loadUserServers(user.id);
+      await loadUserServersBestEffort(user.id);
       if (!restoreToPageAttempted.current) navigate('/dashboard/server');
     } catch (e) {
       setError(`Failed to process user data: ${e instanceof Error ? e.message : 'Unknown error'}`);
     }
   };
 
-  const exchangeTokenAndSaveUser = async (providerToken: string, facebookData: { id?: string; name?: string; email?: string; picture_url?: string }, supabaseUser: { id: string; email?: string }) => {
+  const exchangeTokenAndSaveUser = async (providerToken: string | undefined | null, facebookData: { id?: string; name?: string; email?: string; picture_url?: string }, supabaseUser: { id: string; email?: string }) => {
     try {
       if (!providerToken) {
-        await saveUserToDatabase(null, facebookData, supabaseUser);
+        // No provider_token = magic-link session (custom Facebook flow).
+        // The auth-facebook Edge Function already saved token + profile to DB.
+        // Just load the long-lived token from DB so the dashboard can use it.
+        const dbToken = await loadLongLivedTokenFromDb(supabaseUser.id);
+        if (dbToken) setFacebookAccessToken(dbToken);
         return;
       }
 
-      const { data: { session } } = await supabase.auth.getSession();
+      const { data: { session } } = await promiseWithTimeout(
+        (async () => {
+          const result = await supabase.auth.getSession();
+          return result;
+        })(),
+        6000
+      );
       
       const supabaseUrl = getEnvVar('VITE_SUPABASE_URL');
       const supabaseKey = getEnvVar('VITE_SUPABASE_ANON_KEY');
-      const response = await fetch(`${supabaseUrl}/functions/v1/exchange-facebook-token`, {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${session?.access_token || supabaseKey || ''}`,
+      };
+      if (supabaseKey) headers['apikey'] = supabaseKey;
+      const response = await fetchWithTimeout(`${supabaseUrl}/functions/v1/exchange-facebook-token`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session?.access_token || supabaseKey}`,
-          'apikey': supabaseKey
-        },
+        headers,
         body: JSON.stringify({
           shortLivedToken: providerToken,
           userId: supabaseUser.id
-        })
+        }),
+        timeoutMs: 12000
       });
 
       if (!response.ok) {
@@ -385,77 +537,128 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
         setFacebookAccessToken(data.longLivedToken);
         await saveUserToDatabase(data, facebookData, supabaseUser);
       } else {
-        await saveUserToDatabase(null, facebookData, supabaseUser, providerToken);
+        await saveUserToDatabase(null, facebookData, supabaseUser, providerToken ?? undefined);
       }
 
     } catch {
-      await saveUserToDatabase(null, facebookData, supabaseUser, providerToken);
+      await saveUserToDatabase(null, facebookData, supabaseUser, providerToken ?? undefined);
     }
   };
 
   const saveUserToDatabase = async (
     tokenData: { longLivedToken?: string; expiresAt?: string; grantedScopes?: string[] } | null,
     facebookData: { id?: string; name?: string; picture_url?: string },
-    supabaseUser: { id: string; email?: string },
+    supabaseUser: { id: string; email?: string | null },
     fallbackToken?: string
   ) => {
-    const tokenToUse = tokenData?.longLivedToken || fallbackToken || facebookAccessToken;
-    const expiresAt = tokenData?.expiresAt || new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
-    const scopes = tokenData?.grantedScopes || ['email', 'pages_read_engagement', 'business_management', 'ads_management'];
-    
-    const { error: dbError } = await supabase
-      .rpc('upsert_user_with_facebook_data', {
-        p_user_id: supabaseUser.id,
-        p_email: supabaseUser.email,
-        p_name: facebookData.name,
-        p_facebook_id: facebookData.id,
-        p_facebook_name: facebookData.name,
-        p_facebook_email: supabaseUser.email,
-        p_facebook_picture_url: facebookData.picture_url,
-        p_facebook_access_token: tokenToUse,
-        p_facebook_long_lived_token: tokenToUse,
-        p_facebook_token_expires_at: expiresAt,
-        p_facebook_scopes: scopes
-      });
+    // When tokenData is null (exchange failed or success: false), do NOT write token or expiry —
+    // otherwise we overwrite the existing long-lived token and 60-day expiry with short-lived token
+    // and 2-hour expiry, causing "connection expired" after 2 hours.
+    const tokenToUse =
+      tokenData != null ? (tokenData.longLivedToken ?? fallbackToken ?? facebookAccessToken) : undefined;
+    const expiresAt =
+      tokenData != null
+        ? (tokenData.expiresAt ?? new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString())
+        : undefined;
+
+    if (!tokenToUse && !facebookData.id && !facebookData.name) {
+      return;
+    }
+
+    const scopes = tokenData?.grantedScopes ?? ['email', 'pages_read_engagement', 'business_management', 'ads_management'];
+    const str = (v: string | null | undefined): string | undefined => (v == null ? undefined : v);
+    const { error: dbError } = await promiseWithTimeout(
+      (async () => {
+        const result = await supabase.rpc('upsert_user_with_facebook_data', {
+          p_user_id: supabaseUser.id,
+          p_email: str(supabaseUser.email),
+          p_name: str(facebookData.name),
+          p_facebook_id: str(facebookData.id),
+          p_facebook_name: str(facebookData.name),
+          p_facebook_email: str(supabaseUser.email),
+          p_facebook_picture_url: str(facebookData.picture_url),
+          p_facebook_access_token: str(tokenToUse ?? undefined),
+          p_facebook_long_lived_token: str(tokenToUse ?? undefined),
+          p_facebook_token_expires_at: expiresAt ?? undefined,
+          p_facebook_scopes: scopes,
+        });
+        return result;
+      })(),
+      10000
+    );
 
     if (dbError) {
       throw new Error('Failed to save user data: ' + dbError.message);
     }
 
-    // Ensure we have the token in state
     if (tokenToUse && !facebookAccessToken) {
       setFacebookAccessToken(tokenToUse);
     }
   };
 
-  const loadUserServers = async (userId: string) => {
+  const loadUserServers = async (userId: string): Promise<Server[]> => {
     try {
-      const { data: serversData, error } = await supabase
-        .rpc('get_user_servers', {
-          p_user_id: userId
-        });
+      const { data: withSettingsData, error: withSettingsError } = await runRpcWithFallback<Array<{
+        server_id: string;
+        server_name: string;
+        session_token: string;
+        created_at: string;
+        is_active: boolean;
+        settings?: ServerSettings;
+        description?: string | null;
+      }>>('get_user_servers_with_settings', { p_user_id: userId }, 8000);
 
+      if (!withSettingsError && withSettingsData && withSettingsData.length > 0) {
+        const serversList: Server[] = withSettingsData.map((s) => ({
+          id: s.server_id,
+          name: s.server_name,
+          access_token: s.session_token ?? '',
+          created_at: s.created_at,
+          is_active: s.is_active ?? true,
+          settings: s.settings ?? undefined,
+          description: s.description ?? undefined
+        })).filter((s) => s.access_token);
+        setServers(serversList);
+        return serversList;
+      }
+
+      const { data: serversData, error } = await runRpcWithFallback<Array<{
+        server_id: string;
+        server_name: string;
+        session_token: string;
+        created_at: string;
+        is_active: boolean;
+      }>>('get_user_servers', { p_user_id: userId }, 8000);
       if (error) throw error;
 
-      const serversList: Server[] = (serversData || []).map((server: { server_id: string; server_name: string; session_token: string; created_at: string; is_active: boolean }) => ({
+      const serversList: Server[] = (serversData || []).map((server) => ({
         id: server.server_id,
         name: server.server_name,
         access_token: server.session_token,
         created_at: server.created_at,
         is_active: server.is_active
       }));
-
       setServers(serversList);
+      return serversList;
     } catch {
       // Servers load failed
+      return [];
+    }
+  };
+
+  const loadUserServersBestEffort = async (userId: string): Promise<void> => {
+    try {
+      await promiseWithTimeout(loadUserServers(userId), 10000);
+    } catch {
+      // Keep route transitions responsive; list can refresh later.
     }
   };
 
   const handleLogout = async () => {
     try {
-      await supabase.auth.signOut();
+      await authService.logout();
     } catch {
-      // Sign out failed, continue
+      authService.clearAuth();
     }
   };
 
@@ -476,6 +679,18 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
     navigate('/dashboard/business');
   };
 
+  // Go straight to workspace using last saved business/ad account/page for this server
+  const handleContinueWithLastWorkspace = (
+    serverId: string,
+    businessId: string,
+    adAccountId: string,
+    pageId: string,
+    serverAccessToken: string
+  ) => {
+    if (!currentUser) return;
+    handleBusinessSelected(serverId, businessId, adAccountId, pageId, serverAccessToken, currentUser.id);
+  };
+
   const handleServerCreated = (newServer: Server) => {
     setServers(prev => [newServer, ...prev]);
   };
@@ -488,19 +703,72 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
     }
   };
 
-  // Updated handler to match the new signature
+  const handleRefreshServers = async () => {
+    if (!currentUser?.id) return;
+    try {
+      await promiseWithTimeout(loadUserServers(currentUser.id), 8000);
+    } catch {
+      // Keep optimistic UI behavior; refresh is best-effort.
+    }
+  };
+
+  const persistServerSettings = async (
+    serverId: string,
+    businessId: string,
+    adAccountId: string,
+    pageId: string,
+    names?: { businessName: string; adAccountName: string; pageName: string }
+  ): Promise<{ error: { message: string } | null }> => {
+    const token = getStoredAccessToken();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (supabaseAnonKeyEnv) headers.apikey = supabaseAnonKeyEnv;
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    try {
+      const response = await fetchWithTimeout(`${supabaseUrlEnv}/rest/v1/rpc/update_server_settings`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          p_server_id: serverId,
+          p_settings: {
+            last_workspace: {
+              business_id: businessId,
+              business_name: names?.businessName,
+              ad_account_id: adAccountId,
+              ad_account_name: names?.adAccountName,
+              page_id: pageId,
+              page_name: names?.pageName
+            }
+          }
+        }),
+        timeoutMs: 12000
+      });
+
+      if (!response.ok) {
+        const body = await response.text();
+        return { error: { message: `Failed to save workspace (${response.status}): ${body.slice(0, 180)}` } };
+      }
+
+      return { error: null };
+    } catch (e) {
+      return { error: { message: e instanceof Error ? e.message : 'Failed to save workspace' } };
+    }
+  };
+
   const handleBusinessSelected = async (
     serverId: string,
     businessId: string,
     adAccountId: string,
     pageId: string,
     serverAccessToken: string,
-    _userId?: string
+    _userId?: string,
+    names?: { businessName: string; adAccountName: string; pageName: string }
   ) => {
-    void _userId; // Required by callback signature, not used
+    void _userId;
     if (!currentUser) return;
 
-    // Navigate immediately so slow/hanging RPC does not block workspace (same pattern as Supabase upserts in BusinessSelectionStep)
     onServerSelected(
       serverId,
       businessId,
@@ -510,19 +778,61 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
       currentUser.id
     );
 
-    // Persist server–business link in background; do not block navigation
-    void supabase
-      .rpc('update_server_business', {
-        p_server_id: serverId,
-        p_business_id: businessId
-      })
-      .then(({ error: updateError }) => {
-        if (updateError) {
-          setError(`Failed to update server business: ${updateError.message}`);
+    void promiseWithTimeout(persistServerSettings(serverId, businessId, adAccountId, pageId, names), 10000)
+      .then(({ error: settingsError }: { error: { message: string } | null }) => {
+        if (settingsError) {
+          setError((prev) => prev || `Failed to save workspace: ${settingsError.message}`);
         }
       })
-      .catch((e) => {
+      .catch((e: unknown) => {
         setError(`Failed to select business: ${e instanceof Error ? e.message : 'Unknown error'}`);
+      });
+  };
+
+  const handleSaveServer = async (
+    serverId: string,
+    businessId: string,
+    adAccountId: string,
+    pageId: string,
+    _serverAccessToken: string,
+    _userId?: string,
+    names?: { businessName: string; adAccountName: string; pageName: string }
+  ): Promise<void> => {
+    void _serverAccessToken;
+    void _userId;
+    if (!currentUser) return;
+
+    // Update UI immediately to avoid long "Saving..." spinners if backend is slow.
+    setServers(prev => prev.map(s =>
+      s.id === serverId
+        ? {
+            ...s,
+            settings: {
+              ...s.settings,
+              last_workspace: {
+                business_id: businessId,
+                business_name: names?.businessName,
+                ad_account_id: adAccountId,
+                ad_account_name: names?.adAccountName,
+                page_id: pageId,
+                page_name: names?.pageName
+              }
+            }
+          }
+        : s
+    ));
+    navigate('/dashboard/server');
+
+    void promiseWithTimeout(persistServerSettings(serverId, businessId, adAccountId, pageId, names), 10000)
+      .then(({ error: settingsError }) => {
+        if (settingsError) {
+          setError(`Saved locally, but cloud save failed: ${settingsError.message}`);
+          return;
+        }
+        void handleRefreshServers();
+      })
+      .catch((e: unknown) => {
+        setError(`Saved locally, but cloud save failed: ${e instanceof Error ? e.message : 'Unknown error'}`);
       });
   };
 
@@ -563,6 +873,20 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
   }
 
   const tokenMissing = facebookTokenStatus === 'valid' && !getAvailableFacebookToken();
+  /** Don't show reconnect while init effect is still loading token from DB (valid status but token not in state yet). */
+  const initStillLoading = !!(initialAuthUserId && tokenMissing && !initAuthResolvedRef.current);
+  if (initStillLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 px-4">
+        <div className="text-center">
+          <Spinner size="md" className="mx-auto" />
+          <p className="mt-4 text-gray-600 dark:text-gray-300 text-sm sm:text-base">
+            Checking your connection...
+          </p>
+        </div>
+      </div>
+    );
+  }
   if (currentUser && (facebookTokenStatus === 'expired' || tokenMissing)) {
     return (
       <LoginStep
@@ -590,6 +914,7 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
       );
 
     case 'server-creation':
+      if (!currentUser) return null;
       return (
         <ServerManagementStep
           currentUser={currentUser}
@@ -603,10 +928,13 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
           supabase={supabase}
           facebookAccessToken={getAvailableFacebookToken()}
           onCompleteServerSelection={handleCompleteServerSelection}
+          onContinueWithLastWorkspace={handleContinueWithLastWorkspace}
+          onRefreshServers={handleRefreshServers}
         />
       );
 
     case 'business-selection':
+      if (!currentUser) return null;
       return (
         <BusinessSelectionStep
           currentUser={currentUser}
@@ -617,6 +945,7 @@ const FacebookLogin: React.FC<FacebookLoginProps> = ({
           facebookAccessToken={getAvailableFacebookToken()}
           error={error}
           onBusinessSelected={handleBusinessSelected}
+          onSaveServer={handleSaveServer}
           onBusinessSelectionChange={setSelectedBusiness}
           onBusinessAccountsChange={setBusinessAccounts}
           onBackToServers={handleBackToServers}

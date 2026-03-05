@@ -168,7 +168,6 @@ const AppContent = () => {
   };
 
   const handleLogout = () => {
-    authService.logout();
     sessionStorage.removeItem(WORKSPACE_STORAGE_KEY);
     setSelectedBusinessId('');
     setSelectedAdAccountId('');

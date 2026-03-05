@@ -1,6 +1,20 @@
 -- Returns the current user's Facebook token expiry for the dashboard to gate access.
--- Requires a table (e.g. public.users) with id = auth.uid() and facebook_token_expires_at.
--- If your table/column names differ, update the SELECT below.
+-- Ensures public.users has the required columns, then creates the RPC.
+-- public.users must already exist (e.g. from Supabase Auth or your app setup).
+
+-- Ensure required columns exist so the RPC can read them
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'facebook_token_expires_at') THEN
+    ALTER TABLE public.users ADD COLUMN facebook_token_expires_at timestamptz;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'facebook_long_lived_token') THEN
+    ALTER TABLE public.users ADD COLUMN facebook_long_lived_token text;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'facebook_access_token') THEN
+    ALTER TABLE public.users ADD COLUMN facebook_access_token text;
+  END IF;
+END $$;
 
 CREATE OR REPLACE FUNCTION get_my_facebook_token_status()
 RETURNS jsonb

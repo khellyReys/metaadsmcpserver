@@ -1,17 +1,33 @@
 import React, { useState, useEffect, useMemo, useRef  } from "react";
-import { useNavigate } from "react-router-dom";
-import { Copy, Search, Play, ArrowRight, AlertCircle, CheckCircle2, X, Terminal, Loader, KeyRound } from "lucide-react";
+import { useNavigate, Link } from "react-router-dom";
+import { Search, Play, ArrowRight, AlertCircle, CheckCircle2, X, Terminal, Loader, KeyRound } from "lucide-react";
 import Spinner from './Spinner';
+import CredentialsModal from './CredentialsModal';
 import ThemeToggle from './ThemeToggle';
 import { getEnvVar } from '../lib/env';
 import { promiseWithTimeout } from '../lib/asyncUtils';
 import { useVisibilityReset } from '../hooks/useVisibilityReset';
 import authService from '../auth/authService';
-// @ts-expect-error - paths.js is in public folder, not typed
 import { toolPaths } from '../../public/tools/paths.js';
 
 // Pre-bundle all tool modules so Vite can resolve them at build time (dynamic import with variable path fails)
-const toolModules = import.meta.glob<{ apiTool?: { definition?: { function?: { name?: string; description?: string; category?: string; parameters?: unknown }; function?: unknown } } }>('../../public/tools/**/*.js');
+type ToolModule = {
+  apiTool?: {
+    definition?: {
+      function?: { name?: string; description?: string; category?: string; parameters?: unknown };
+    };
+    function?: unknown;
+  };
+};
+const toolModules = import.meta.glob<ToolModule>('../../public/tools/**/*.js');
+
+interface McpToolParamProperty {
+  type: string;
+  description?: string;
+  required?: boolean;
+  enum?: string[];
+  items?: { enum?: string[] };
+}
 
 interface McpTool {
   id: string;
@@ -20,11 +36,7 @@ interface McpTool {
   category: string;
   parameters?: {
     type: string;
-    properties: Record<string, {
-      type: string;
-      description?: string;
-      required?: boolean;
-    }>;
+    properties: Record<string, McpToolParamProperty>;
     required?: string[];
   };
 }
@@ -56,13 +68,22 @@ const AdTools: React.FC<AdToolsProps> = ({ businessId, adAccountId, pageId, serv
   const [userProfile, setUserProfile] = useState<{ name?: string; email?: string; picture?: string } | null>(null);
 
   useEffect(() => {
-    authService.checkAuthStatus().then((r) => {
-      if (r.userData) setUserProfile({ name: r.userData.name, email: r.userData.email, picture: r.userData.picture });
-    });
+    promiseWithTimeout(authService.checkAuthStatus(), 10000)
+      .then((r: { userData?: { name?: string; email?: string; picture?: string } }) => {
+        if (r.userData) setUserProfile({ name: r.userData.name, email: r.userData.email, picture: r.userData.picture });
+      })
+      .catch(() => {
+        // Profile sync is best-effort; tools should still load.
+      });
   }, []);
 
-  const handleLogout = () => {
-    authService.logout();
+  const handleLogout = async () => {
+    try {
+      await promiseWithTimeout(authService.logout(), 15000);
+    } catch {
+      authService.clearAuth();
+    }
+    sessionStorage.removeItem('meta_ads_workspace');
     navigate('/');
   };
 
@@ -79,16 +100,40 @@ const AdTools: React.FC<AdToolsProps> = ({ businessId, adAccountId, pageId, serv
   const [parameterValues, setParameterValues] = useState<Record<string, string>>({});
   const [toolResponse, setToolResponse] = useState<unknown>(null);
   const [executionError, setExecutionError] = useState<string | null>(null);
-  const [copiedField, setCopiedField] = useState<string | null>(null);
   const [showCredentials, setShowCredentials] = useState(false);
 
   const esRef = useRef<EventSource | null>(null);
-  const pendingRef = useRef<Map<number, (msg: unknown) => void>>(new Map());
+  const pendingRef = useRef<Map<number, { resolve: (msg: unknown) => void; timeout: ReturnType<typeof setTimeout> }>>(new Map());
+  const lastSseActivityRef = useRef<number>(Date.now());
+  const [reconnectCounter, setReconnectCounter] = useState(0);
+
+  const flushPending = (reason: string) => {
+    pendingRef.current.forEach(({ resolve, timeout }) => {
+      clearTimeout(timeout);
+      resolve({ error: { message: reason } });
+    });
+    pendingRef.current.clear();
+  };
+
+  const triggerReconnect = () => {
+    esRef.current?.close();
+    esRef.current = null;
+    setReconnectCounter(c => c + 1);
+  };
 
   useVisibilityReset(() => {
     setLoadingTools(false);
-    setConnecting(false);
     setRunningTool(null);
+
+    const idleMs = Date.now() - lastSseActivityRef.current;
+    const es = esRef.current;
+    const connectionDead = !es || es.readyState === EventSource.CLOSED;
+    if (connectionDead || idleMs > 60_000) {
+      flushPending("Connection lost — reconnecting");
+      triggerReconnect();
+    } else {
+      setConnecting(false);
+    }
   });
 
   // Load tools effect
@@ -133,6 +178,15 @@ const AdTools: React.FC<AdToolsProps> = ({ businessId, adAccountId, pageId, serv
                 category = 'Optimization';
               }
               
+              const params = def.parameters;
+              const validParams =
+                params &&
+                typeof params === 'object' &&
+                'type' in params &&
+                'properties' in params &&
+                typeof (params as { properties?: unknown }).properties === 'object'
+                  ? (params as McpTool['parameters'])
+                  : undefined;
               loaded.push({
                 id: `${def.name}:${path}`,
                 name: def.name,
@@ -141,7 +195,7 @@ const AdTools: React.FC<AdToolsProps> = ({ businessId, adAccountId, pageId, serv
                 // 1. Use explicit category from tool file (if exists)
                 // 2. Use our auto-detected category
                 category: mod.apiTool?.definition?.function?.category || category,
-                parameters: def.parameters || undefined,
+                parameters: validParams,
               });
             }
           } catch {
@@ -173,7 +227,6 @@ const AdTools: React.FC<AdToolsProps> = ({ businessId, adAccountId, pageId, serv
 
   // SSE URL & handshake - using accountId for connection
   const sseBaseUrl = `${MCP_BASE_URL}/api/sse`;
-  const mcpHttpBaseUrl = `${MCP_BASE_URL}/api/mcp`;
   const sseToken = useMemo(() => {
     const tokenString = `${serverId}:${serverAccessToken}`;
     return btoa(tokenString);
@@ -181,9 +234,6 @@ const AdTools: React.FC<AdToolsProps> = ({ businessId, adAccountId, pageId, serv
   const sseUrl = useMemo(() => {
     return `${sseBaseUrl}?token=${encodeURIComponent(sseToken)}`;
   }, [sseBaseUrl, sseToken]);
-  const mcpHttpUrl = useMemo(() => {
-    return `${mcpHttpBaseUrl}?token=${encodeURIComponent(sseToken)}`;
-  }, [mcpHttpBaseUrl, sseToken]);
   
   useEffect(() => {
     esRef.current?.close();
@@ -193,22 +243,27 @@ const AdTools: React.FC<AdToolsProps> = ({ businessId, adAccountId, pageId, serv
 
     const es = new EventSource(sseUrl);
     esRef.current = es;
+    lastSseActivityRef.current = Date.now();
   
     const onEndpoint = (e: MessageEvent) => {
-      // e.data like "/messages?sessionId=..."
+      lastSseActivityRef.current = Date.now();
+      flushPending("Session replaced by new connection");
       setSessionPath(e.data as string);
       setConnecting(false);
+      setError(null);
     };
   
     const onMessage = (e: MessageEvent) => {
+      lastSseActivityRef.current = Date.now();
       try {
         const msg = JSON.parse(e.data as string);
         const m = msg as { id?: number };
         if (msg && typeof m.id !== "undefined") {
-          const fn = pendingRef.current.get(m.id);
-          if (fn) {
+          const entry = pendingRef.current.get(m.id);
+          if (entry) {
+            clearTimeout(entry.timeout);
             pendingRef.current.delete(m.id);
-            fn(msg);
+            entry.resolve(msg);
           }
         }
       } catch {
@@ -220,11 +275,13 @@ const AdTools: React.FC<AdToolsProps> = ({ businessId, adAccountId, pageId, serv
     es.addEventListener("message", onMessage);
   
     es.onopen = () => {
+      lastSseActivityRef.current = Date.now();
       setConnecting(false);
       setError(null);
     };
   
     es.onerror = () => {
+      setSessionPath(undefined);
       setError("SSE disconnected. Reconnecting…");
       setConnecting(true);
     };
@@ -235,16 +292,16 @@ const AdTools: React.FC<AdToolsProps> = ({ businessId, adAccountId, pageId, serv
       es.close();
       esRef.current = null;
     };
-  }, [sseUrl]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sseUrl, reconnectCounter]);
+
+  useEffect(() => {
+    return () => { flushPending("Component unmounted"); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   
 
 
-  // Helpers: copy, callTool, open/close dialog, handle params
-  const copyField = (txt: string, field: string) => async () => {
-    try { await navigator.clipboard.writeText(txt); } catch { /* fallback */ }
-    setCopiedField(field);
-    setTimeout(() => setCopiedField(null), 2000);
-  };
   const postRpc = async (body: object) => {
     const doPost = async (path: string) => {
       const res = await fetch(`${MCP_BASE_URL}${path}`, {
@@ -275,8 +332,9 @@ const AdTools: React.FC<AdToolsProps> = ({ businessId, adAccountId, pageId, serv
       let j: { error?: { message?: string; code?: number } } | null = null;
       try { j = raw ? JSON.parse(raw) : null; } catch { /* ignore */ }
 
-      // Session expired / not found (server no longer returns session IDs for security)
+      // Session expired / not found — auto-reconnect SSE
       if (res.status === 400 && j?.error?.message) {
+        triggerReconnect();
         throw new Error(j.error.message);
       }
 
@@ -302,17 +360,22 @@ const AdTools: React.FC<AdToolsProps> = ({ businessId, adAccountId, pageId, serv
   
     // unique id for this JSON-RPC call
     const id = Date.now();
-  
+
+    interface SseToolResponse {
+      id?: number;
+      error?: { message?: string };
+      result?: unknown;
+    }
     // Promise that resolves when SSE delivers the response with matching id
-    const waitForSse = new Promise<unknown>((resolve, reject) => {
+    const waitForSse = new Promise<SseToolResponse>((resolve, reject) => {
       const timeout = setTimeout(() => {
         pendingRef.current.delete(id);
         reject(new Error("Timed out waiting for tool response"));
-      }, 30000); // adjust if your tools take longer
-  
-      pendingRef.current.set(id, (msg) => {
-        clearTimeout(timeout);
-        resolve(msg);
+      }, 30000);
+
+      pendingRef.current.set(id, {
+        resolve: (msg) => { resolve(msg as SseToolResponse); },
+        timeout,
       });
     });
   
@@ -337,10 +400,12 @@ const AdTools: React.FC<AdToolsProps> = ({ businessId, adAccountId, pageId, serv
       } else {
         // Some servers may return JSON directly
         setToolResponse(postResult);
-        pendingRef.current.delete(id); // avoid leak if SSE also sends something
+        const leftover = pendingRef.current.get(id);
+        if (leftover) { clearTimeout(leftover.timeout); pendingRef.current.delete(id); }
       }
     } catch (e) {
-      pendingRef.current.delete(id);
+      const leftover = pendingRef.current.get(id);
+      if (leftover) { clearTimeout(leftover.timeout); pendingRef.current.delete(id); }
       setExecutionError(e instanceof Error ? e.message : "An error occurred");
     } finally {
       setRunningTool(null);
@@ -499,16 +564,8 @@ const AdTools: React.FC<AdToolsProps> = ({ businessId, adAccountId, pageId, serv
   
   const isFormValid = () => !selectedTool?.parameters || (selectedTool.parameters.required || []).every(r => parameterValues[r]?.trim());
   
-  const handleBackToPage = () => {
-    sessionStorage.setItem('backToPageFromTools', '1');
-    navigate('/dashboard/page', {
-      state: {
-        backToStep: 'page',
-        serverId,
-        businessId,
-        adAccountId,
-      },
-    });
+  const handleBackToDashboard = () => {
+    navigate('/dashboard/server');
   };
   const status = connecting ? {icon:Loader,text:'Connecting...',color:'text-yellow-600'}
                 : error ? {icon:AlertCircle,text:'Connection Failed',color:'text-red-600'}
@@ -561,11 +618,17 @@ const getReadableOutput = (resp: unknown): string => {
             <div className="flex items-center justify-between w-full">
               <div className="flex items-center gap-2 sm:gap-3 min-w-0">
                 {userProfile.picture && (
-                  <img
-                    src={userProfile.picture}
-                    alt={userProfile.name}
-                    className="w-8 h-8 sm:w-9 sm:h-9 rounded-full object-cover shrink-0"
-                  />
+                  <Link
+                    to="/dashboard"
+                    className="rounded-full shrink-0 ring-2 ring-transparent hover:ring-blue-300 dark:hover:ring-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                    aria-label="Go to dashboard"
+                  >
+                    <img
+                      src={userProfile.picture}
+                      alt={userProfile.name}
+                      className="w-8 h-8 sm:w-9 sm:h-9 rounded-full object-cover"
+                    />
+                  </Link>
                 )}
                 <div className="text-left min-w-0">
                   <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">{userProfile.name || userProfile.email}</p>
@@ -622,11 +685,11 @@ const getReadableOutput = (resp: unknown): string => {
         <p className="text-gray-600 dark:text-gray-300 text-center mb-4">Run Meta Ads tools for your connected account</p>
         <div className="flex flex-wrap items-center justify-center mb-6">
           <button
-            onClick={handleBackToPage}
+            onClick={handleBackToDashboard}
             className="inline-flex items-center gap-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
           >
             <ArrowRight className="w-4 h-4 rotate-180" />
-            <span>Back to page</span>
+            <span>Back to Dashboard</span>
           </button>
         </div>
 
@@ -729,13 +792,13 @@ const getReadableOutput = (resp: unknown): string => {
                           ) : hasEnumOptions ? (
                             // Dropdown for parameters with enum options - NO "Select" placeholder, always show default
                             <select 
-                              value={parameterValues[k] || def.enum[0]} 
+                              value={parameterValues[k] || (def.enum ?? [])[0]} 
                               onChange={e=>handleParameterChange(k,e.target.value)} 
                               className="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-base"
                               required={required}
                             >
                               {/* Render each enum option - no placeholder */}
-                              {def.enum.map(option => (
+                              {(def.enum ?? []).map((option: string) => (
                                 <option key={option} value={option}>
                                   {option}
                                 </option>
@@ -771,7 +834,7 @@ const getReadableOutput = (resp: unknown): string => {
                               className="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-base min-h-[100px]"
                               required={required}
                             >
-                              {def.items.enum.map(option => (
+                              {(def.items?.enum ?? []).map((option: string) => (
                                 <option key={option} value={option}>
                                   {option}
                                 </option>
@@ -879,158 +942,12 @@ const getReadableOutput = (resp: unknown): string => {
         </div>
       )}
 
-      {/* Credentials Modal */}
-      {showCredentials && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4">
-          <div className="absolute inset-0 bg-black bg-opacity-60" onClick={() => setShowCredentials(false)} />
-          <div className="relative bg-white dark:bg-gray-800 rounded-2xl w-full max-w-lg max-h-[90vh] flex flex-col shadow-2xl overflow-hidden border border-gray-200 dark:border-gray-700">
-            {/* Header */}
-            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700">
-              <h2 className="text-lg font-bold text-gray-900 dark:text-gray-100">Connection Credentials</h2>
-              <button onClick={() => setShowCredentials(false)} className="p-1.5 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors">
-                <X className="w-5 h-5 text-gray-500 dark:text-gray-400" />
-              </button>
-            </div>
-
-            {/* Body */}
-            <div className="flex-1 overflow-y-auto p-5 space-y-5">
-              {/* Warning */}
-              <div className="flex items-start gap-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg px-4 py-3 text-sm text-amber-800 dark:text-amber-200">
-                <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                <span>Copy and store these credentials securely. Do not share them publicly.</span>
-              </div>
-
-              {/* Streamable HTTP */}
-              <div className="rounded-xl overflow-hidden border border-emerald-200 dark:border-emerald-800">
-                <div className="bg-emerald-50 dark:bg-emerald-900/30 px-4 py-3 border-b border-emerald-200 dark:border-emerald-800">
-                  <div className="flex items-center gap-2">
-                    <h3 className="font-semibold text-emerald-900 dark:text-emerald-100">Streamable HTTP</h3>
-                    <span className="text-xs font-medium px-2 py-0.5 bg-emerald-200 dark:bg-emerald-800 text-emerald-800 dark:text-emerald-200 rounded-full">Recommended</span>
-                  </div>
-                  <p className="text-sm text-emerald-700 dark:text-emerald-300 mt-1">
-                    Single endpoint for all MCP communication. Supported by Cursor, Claude Desktop, and newer clients.
-                  </p>
-                </div>
-                <div className="bg-emerald-50/40 dark:bg-emerald-900/10 p-4 space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Option 1: Endpoint + Token</label>
-                    <div className="flex items-center border border-gray-200 dark:border-gray-600 rounded-lg overflow-hidden bg-white dark:bg-gray-700">
-                      <input readOnly value={mcpHttpBaseUrl} className="flex-1 p-2.5 text-sm font-mono text-gray-700 dark:text-gray-300 bg-transparent min-w-0" />
-                      <button
-                        onClick={copyField(mcpHttpBaseUrl, 'http-base')}
-                        className="px-3 py-2.5 text-gray-500 dark:text-gray-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors flex-shrink-0"
-                      >
-                        {copiedField === 'http-base' ? <CheckCircle2 className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Token</label>
-                    <div className="flex items-center border border-gray-200 dark:border-gray-600 rounded-lg overflow-hidden bg-white dark:bg-gray-700">
-                      <input readOnly value={'●'.repeat(8)} className="flex-1 p-2.5 text-sm font-mono text-gray-700 dark:text-gray-300 bg-transparent min-w-0 tracking-widest" />
-                      <button
-                        onClick={copyField(sseToken, 'http-token')}
-                        className="px-3 py-2.5 text-gray-500 dark:text-gray-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors flex-shrink-0"
-                      >
-                        {copiedField === 'http-token' ? <CheckCircle2 className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
-                      </button>
-                    </div>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1.5">
-                      Use with header: <code className="bg-gray-100 dark:bg-gray-700 px-1 py-0.5 rounded font-mono">Authorization: Bearer &lt;token&gt;</code>
-                    </p>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Option 2: Full URL with token</label>
-                    <div className="flex items-center border border-gray-200 dark:border-gray-600 rounded-lg overflow-hidden bg-white dark:bg-gray-700">
-                      <input readOnly value={`${mcpHttpBaseUrl}?token=${'●'.repeat(8)}`} className="flex-1 p-2.5 text-sm font-mono text-gray-700 dark:text-gray-300 bg-transparent min-w-0" />
-                      <button
-                        onClick={copyField(mcpHttpUrl, 'http-full')}
-                        className="px-3 py-2.5 text-gray-500 dark:text-gray-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors flex-shrink-0"
-                      >
-                        {copiedField === 'http-full' ? <CheckCircle2 className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-3">
-                <div className="flex-1 h-px bg-gray-200 dark:bg-gray-700"></div>
-                <span className="text-xs font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wider">or</span>
-                <div className="flex-1 h-px bg-gray-200 dark:bg-gray-700"></div>
-              </div>
-
-              {/* SSE (legacy) */}
-              <div className="rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700">
-                <div className="bg-slate-100 dark:bg-slate-800 px-4 py-3 border-b border-slate-200 dark:border-slate-700">
-                  <div className="flex items-center gap-2">
-                    <h3 className="font-semibold text-slate-900 dark:text-slate-100">SSE</h3>
-                    <span className="text-xs font-medium px-2 py-0.5 bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-full">Legacy</span>
-                  </div>
-                  <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
-                    Server-Sent Events transport for older MCP clients that don't support Streamable HTTP.
-                  </p>
-                </div>
-                <div className="bg-slate-50/50 dark:bg-slate-800/30 p-4 space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Option 1: Endpoint + Token</label>
-                    <div className="flex items-center border border-gray-200 dark:border-gray-600 rounded-lg overflow-hidden bg-white dark:bg-gray-700">
-                      <input readOnly value={sseBaseUrl} className="flex-1 p-2.5 text-sm font-mono text-gray-700 dark:text-gray-300 bg-transparent min-w-0" />
-                      <button
-                        onClick={copyField(sseBaseUrl, 'sse-base')}
-                        className="px-3 py-2.5 text-gray-500 dark:text-gray-400 hover:text-slate-600 dark:hover:text-slate-400 transition-colors flex-shrink-0"
-                      >
-                        {copiedField === 'sse-base' ? <CheckCircle2 className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Token</label>
-                    <div className="flex items-center border border-gray-200 dark:border-gray-600 rounded-lg overflow-hidden bg-white dark:bg-gray-700">
-                      <input readOnly value={'●'.repeat(8)} className="flex-1 p-2.5 text-sm font-mono text-gray-700 dark:text-gray-300 bg-transparent min-w-0 tracking-widest" />
-                      <button
-                        onClick={copyField(sseToken, 'sse-token')}
-                        className="px-3 py-2.5 text-gray-500 dark:text-gray-400 hover:text-slate-600 dark:hover:text-slate-400 transition-colors flex-shrink-0"
-                      >
-                        {copiedField === 'sse-token' ? <CheckCircle2 className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
-                      </button>
-                    </div>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1.5">
-                      Use with header: <code className="bg-gray-100 dark:bg-gray-700 px-1 py-0.5 rounded font-mono">Authorization: Bearer &lt;token&gt;</code>
-                    </p>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Option 2: Full URL with token</label>
-                    <div className="flex items-center border border-gray-200 dark:border-gray-600 rounded-lg overflow-hidden bg-white dark:bg-gray-700">
-                      <input readOnly value={`${sseBaseUrl}?token=${'●'.repeat(8)}`} className="flex-1 p-2.5 text-sm font-mono text-gray-700 dark:text-gray-300 bg-transparent min-w-0" />
-                      <button
-                        onClick={copyField(sseUrl, 'sse-full')}
-                        className="px-3 py-2.5 text-gray-500 dark:text-gray-400 hover:text-slate-600 dark:hover:text-slate-400 transition-colors flex-shrink-0"
-                      >
-                        {copiedField === 'sse-full' ? <CheckCircle2 className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Footer */}
-            <div className="px-5 py-4 border-t border-gray-200 dark:border-gray-700 flex justify-end">
-              <button
-                onClick={() => setShowCredentials(false)}
-                className="px-5 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-lg font-medium text-sm transition-colors"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <CredentialsModal
+        serverId={serverId}
+        serverAccessToken={serverAccessToken}
+        isOpen={showCredentials}
+        onClose={() => setShowCredentials(false)}
+      />
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-3 sm:px-4 md:px-6 py-2 sm:py-3">
