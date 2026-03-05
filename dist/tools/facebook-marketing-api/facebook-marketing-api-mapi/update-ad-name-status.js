@@ -1,76 +1,65 @@
 /**
- * Function to update the name and status of an ad in the Facebook Marketing API.
- *
- * @param {Object} args - Arguments for updating the ad.
- * @param {string} args.ad_id_awareness - The ID of the ad to be updated.
- * @param {string} [args.name="PostManAdTrafficUpdate"] - The new name for the ad.
- * @param {string} [args.status="PAUSED"] - The new status for the ad.
- * @returns {Promise<Object>} - The result of the ad update operation.
+ * Update the name and/or status of an ad in the Facebook Marketing API.
  */
-const executeFunction = async ({ ad_id_awareness, name = "PostManAdTrafficUpdate", status = "PAUSED" }) => {
-  const baseUrl = ''; // will be provided by the user
-  const token = process.env.FACEBOOK_MARKETING_API_API_KEY;
+import { getSupabaseClient, getTokenForUser } from './_token-utils.js';
+import { getBaseUrl, safeFacebookError } from './_shared-helpers.js';
+
+const executeFunction = async ({ userId, ad_id, name, status = 'PAUSED' }) => {
+  const supabase = getSupabaseClient();
+  const token = await getTokenForUser(supabase, userId);
+  if (!token) return { error: 'No Facebook access token found for this user' };
+
   try {
-    // Construct the URL for the request
-    const url = `${baseUrl}/${ad_id_awareness}?name=${encodeURIComponent(name)}&status=${encodeURIComponent(status)}`;
+    const url = new URL(`${getBaseUrl()}/${ad_id}`);
+    if (name) url.searchParams.append('name', name);
+    if (status) url.searchParams.append('status', status);
 
-    // Set up headers for the request
-    const headers = {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    };
-
-    // Perform the fetch request
-    const response = await fetch(url, {
+    const response = await fetch(url.toString(), {
       method: 'POST',
-      headers
+      headers: { 'Authorization': `Bearer ${token}` }
     });
 
-    // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
-      console.error('Error updating ad name and status:', JSON.stringify(errorData));
-      throw new Error(errorData);
+      throw new Error(safeFacebookError(errorData));
     }
 
-    // Parse and return the response data
-    const data = await response.json();
-    return data;
+    return await response.json();
   } catch (error) {
-    console.error('Error updating ad name and status:', error);
-    return { error: 'An error occurred while updating the ad.' };
+    console.error('Error updating ad:', error);
+    return { error: 'An error occurred while updating the ad.', details: error.message };
   }
 };
 
-/**
- * Tool configuration for updating an ad's name and status in the Facebook Marketing API.
- * @type {Object}
- */
 const apiTool = {
   function: executeFunction,
   definition: {
     type: 'function',
     function: {
-      name: 'UpdateAdNameStatus',
-      description: 'Update the name and status of an ad in the Facebook Marketing API.',
+      name: 'update_ad_status',
+      description: 'Update the name and/or status of an ad in the Facebook Marketing API.',
       parameters: {
         type: 'object',
         properties: {
-          ad_id_awareness: {
+          userId: {
             type: 'string',
-            description: 'The ID of the ad to be updated.'
+            description: 'The user ID (Supabase auth) to retrieve the Facebook token.'
+          },
+          ad_id: {
+            type: 'string',
+            description: 'The ID of the ad to update.'
           },
           name: {
             type: 'string',
-            description: 'The new name for the ad.'
+            description: 'The new name for the ad (optional).'
           },
           status: {
             type: 'string',
             enum: ['ACTIVE', 'PAUSED', 'ARCHIVED'],
-            description: 'The new status for the ad.'
+            description: 'The new status for the ad (default: PAUSED).'
           }
         },
-        required: ['ad_id_awareness']
+        required: ['userId', 'ad_id']
       }
     }
   }

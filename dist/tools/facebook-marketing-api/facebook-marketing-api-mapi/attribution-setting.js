@@ -1,66 +1,101 @@
 /**
- * Function to get attribution settings from the Facebook Marketing API.
- *
- * @param {Object} args - Arguments for the attribution settings request.
- * @param {string} args.account_id - The Ad Account ID.
- * @param {string} args.token - The access token for authorization.
- * @returns {Promise<Object>} - The result of the attribution settings request.
+ * Fetch insights with attribution windows for a Facebook Ad Account.
  */
-const executeFunction = async ({ account_id, token }) => {
-  const baseUrl = 'https://graph.facebook.com/v12.0'; // Base URL for Facebook Marketing API
-  const url = `${baseUrl}/act_${account_id}/insights?use_unified_attribution_setting=true&async=true&level=ad&date_preset=this_year&breakdowns=product_id&limit=100&action_breakdowns=action_type,action_destination&action_attribution_windows=["1d_click","7d_click","28d_click","1d_view","7d_view","28d_view"]&fields=date_start,date_stop,account_id,account_name,ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,actions,unique_actions,action_values,impressions,clicks,unique_clicks,spend,frequency,inline_link_clicks,inline_post_engagement,reach,website_ctr,video_thruplay_watched_actions,video_avg_time_watched_actions,video_p25_watched_actions,video_p50_watched_actions,video_p75_watched_actions,video_p95_watched_actions,video_p100_watched_actions,video_30_sec_watched_actions,video_play_actions,video_continuous_2_sec_watched_actions,unique_video_continuous_2_sec_watched_actions,estimated_ad_recallers,estimated_ad_recall_rate,unique_outbound_clicks,outbound_clicks,conversions,conversion_values,social_spend&time_increment=1&format=json`;
+import { getSupabaseClient, getTokenForAccount } from './_token-utils.js';
+import { getBaseUrl, normalizeAccountId, safeFacebookError } from './_shared-helpers.js';
+
+const DEFAULT_FIELDS = 'date_start,date_stop,account_id,account_name,ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,actions,unique_actions,action_values,impressions,clicks,unique_clicks,spend,frequency,inline_link_clicks,inline_post_engagement,reach,website_ctr,video_thruplay_watched_actions,conversions,conversion_values,social_spend';
+
+const executeFunction = async ({
+  account_id,
+  date_preset = 'last_30d',
+  level = 'ad',
+  fields,
+  time_increment = '1',
+  breakdowns,
+  action_attribution_windows
+}) => {
+  const supabase = getSupabaseClient();
+  const acctId = normalizeAccountId(account_id);
+  const token = await getTokenForAccount(supabase, acctId);
+  if (!token) return { error: 'No Facebook access token found for this ad account' };
 
   try {
-    // Set up headers for the request
-    const headers = {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    };
+    const url = new URL(`${getBaseUrl()}/act_${acctId}/insights`);
+    url.searchParams.append('use_unified_attribution_setting', 'true');
+    url.searchParams.append('level', level);
+    url.searchParams.append('date_preset', date_preset);
+    url.searchParams.append('fields', fields || DEFAULT_FIELDS);
+    url.searchParams.append('time_increment', time_increment);
+    url.searchParams.append('limit', '100');
+    url.searchParams.append('action_breakdowns', 'action_type,action_destination');
 
-    // Perform the fetch request
-    const response = await fetch(url, {
-      method: 'POST',
-      headers
-    });
-
-    // Check if the response was successful
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData);
+    if (breakdowns) url.searchParams.append('breakdowns', breakdowns);
+    if (action_attribution_windows) {
+      url.searchParams.append('action_attribution_windows', action_attribution_windows);
+    } else {
+      url.searchParams.append('action_attribution_windows', '["1d_click","7d_click","1d_view"]');
     }
 
-    // Parse and return the response data
-    const data = await response.json();
-    return data;
+    const response = await fetch(url.toString(), {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(safeFacebookError(errorData));
+    }
+
+    return await response.json();
   } catch (error) {
-    return { error: 'An error occurred while fetching attribution settings.' };
+    console.error('Error fetching attribution insights:', error);
+    return { error: 'An error occurred while fetching attribution insights.', details: error.message };
   }
 };
 
-/**
- * Tool configuration for fetching attribution settings from the Facebook Marketing API.
- * @type {Object}
- */
 const apiTool = {
   function: executeFunction,
   definition: {
     type: 'function',
     function: {
-      name: 'AttributionSetting',
-      description: 'Fetch attribution settings for a specific Ad Account from Facebook Marketing API.',
+      name: 'get_attribution_insights',
+      description: 'Fetch insights with attribution windows for a Facebook Ad Account. Returns performance data with configurable attribution models.',
       parameters: {
         type: 'object',
         properties: {
           account_id: {
             type: 'string',
-            description: 'The Ad Account ID.'
+            description: 'The Ad Account ID (without act_ prefix).'
           },
-          token: {
+          date_preset: {
             type: 'string',
-            description: 'The access token for authorization.'
+            enum: ['today', 'yesterday', 'this_month', 'last_month', 'this_quarter', 'last_3d', 'last_7d', 'last_14d', 'last_28d', 'last_30d', 'last_90d', 'last_week_mon_sun', 'last_week_sun_sat', 'last_quarter', 'last_year', 'this_week_mon_today', 'this_week_sun_today', 'this_year'],
+            description: 'Date preset for the report (default: last_30d).'
+          },
+          level: {
+            type: 'string',
+            enum: ['account', 'campaign', 'adset', 'ad'],
+            description: 'Reporting level (default: ad).'
+          },
+          fields: {
+            type: 'string',
+            description: 'Comma-separated fields to include (optional, uses comprehensive defaults).'
+          },
+          time_increment: {
+            type: 'string',
+            description: 'Time increment: "1" for daily, "7" for weekly, "monthly", or "all_days" (default: 1).'
+          },
+          breakdowns: {
+            type: 'string',
+            description: 'Optional breakdowns (e.g. "product_id", "age", "gender", "country").'
+          },
+          action_attribution_windows: {
+            type: 'string',
+            description: 'JSON array of attribution windows (default: ["1d_click","7d_click","1d_view"]).'
           }
         },
-        required: ['account_id', 'token']
+        required: ['account_id']
       }
     }
   }

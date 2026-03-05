@@ -3,7 +3,7 @@ import { Bot, Github, Twitter, Linkedin, Mail } from 'lucide-react';
 
 const Footer = () => {
   return (
-    <footer className="bg-gray-900 text-white py-16">
+    <footer className="bg-gray-900 dark:bg-gray-950 text-white py-16 border-t border-gray-800 dark:border-gray-800">
       <div className="container mx-auto px-4 sm:px-6 lg:px-8">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-8 mb-8">
           <div>
@@ -13,7 +13,7 @@ const Footer = () => {
               </div>
               <span className="text-xl font-bold">AdsMCP</span>
             </div>
-            <p className="text-gray-400 mb-4">
+            <p className="text-gray-400 dark:text-gray-500 mb-4">
               AI-powered Facebook Ads automation platform with real-time MCP server capabilities.
             </p>
             <div className="flex space-x-4">
@@ -55,8 +55,8 @@ const Footer = () => {
           </div>
         </div>
 
-        <div className="border-t border-gray-800 pt-8 flex flex-col md:flex-row justify-between items-center">
-          <p className="text-gray-400 text-sm mb-4 md:mb-0">
+        <div className="border-t border-gray-800 dark:border-gray-800 pt-8 flex flex-col md:flex-row justify-between items-center">
+          <p className="text-gray-400 dark:text-gray-500 text-sm mb-4 md:mb-0">
             © 2024 AdsMCP. All rights reserved.
           </p>
           <div className="flex space-x-6 text-sm">

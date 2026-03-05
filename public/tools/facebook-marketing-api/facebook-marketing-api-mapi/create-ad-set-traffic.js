@@ -8,31 +8,28 @@
  *
  * Objective is forced to OUTCOME_TRAFFIC.
  */
+import { getBaseUrl, resolveToken, getCampaignInfo, buildTargeting, convertPesosToCents, locationMap, genderMap, locationEnum, clean } from './_shared-helpers.js';
 
 const executeFunction = async ({
-  // 1) Basics
   account_id,
   campaign_id,
-  name = null, // default will be generated
+  name = null,
   conversion_location = 'website',
   performance_goal = 'link_clicks',
   application_id,
-  page_id, // keep REQUIRED (your UI shows it)
-  pixel_id = null, // optional for Traffic
+  page_id,
+  pixel_id = null,
 
-  // 2) Cost & bidding
   cost_per_result_goal = null,
   bid_strategy = 'LOWEST_COST_WITHOUT_CAP',
   bid_amount = null,
 
-  // 3) Budget & schedule
   budget_type = 'daily_budget',
   daily_budget = 500,
   lifetime_budget = null,
   start_time = null,
   end_time = null,
 
-  // 4) Audience
   location = 'PH',
   age_min = 18,
   age_max = 65,
@@ -40,37 +37,16 @@ const executeFunction = async ({
   detailed_targeting = 'all',
   custom_audience_id = null,
 
-  // 5) Event (rare for Traffic; kept for parity)
   custom_event_type = null,
 
-  // 6) Status
   status = 'ACTIVE',
 }) => {
-  const { createClient } = await import('@supabase/supabase-js');
-
-  const supabase = createClient(
-    process.env.SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY,
-    { auth: { autoRefreshToken: false, persistSession: false } }
-  );
-
-  // ===== Config =====
   const TRAFFIC_CONFIG = {
     objective: 'OUTCOME_TRAFFIC',
     billingEvent: 'IMPRESSIONS',
     defaultName: (loc, goal) =>
       `Traffic ${loc} ${goal} ${new Date().toISOString().split('T')[0]}`,
 
-    /**
-     * Conversion locations (Traffic)
-     * - website
-     * - app
-     * - messenger (Messenger/WhatsApp/IG chats)
-     * - instagram (IG chats/profile destinations)
-     * - calls
-     * - website_and_messenger
-     * - website_and_calls
-     */
     conversionLocations: {
       website: {
         validPerformanceGoals: [
@@ -81,7 +57,7 @@ const executeFunction = async ({
           'daily_unique_reach',
         ],
         validOptimizationGoals: ['LINK_CLICKS', 'LANDING_PAGE_VIEWS', 'IMPRESSIONS', 'REACH'],
-        requiredFields: [], // pixel optional for Traffic
+        requiredFields: [],
         destinationType: 'WEBSITE',
       },
       app: {
@@ -99,7 +75,7 @@ const executeFunction = async ({
       instagram: {
         validPerformanceGoals: ['maximize_conversations', 'cost_per_conversation', 'link_clicks'],
         validOptimizationGoals: ['CONVERSATIONS', 'LINK_CLICKS'],
-        requiredFields: ['page_id'], // IG connected to Page
+        requiredFields: ['page_id'],
       },
       calls: {
         validPerformanceGoals: ['maximize_calls', 'cost_per_call'],
@@ -130,149 +106,42 @@ const executeFunction = async ({
       },
     },
 
-    // Base performance → optimization mapping
     performanceGoals: {
       link_clicks: 'LINK_CLICKS',
       landing_page_views: 'LANDING_PAGE_VIEWS',
       impressions: 'IMPRESSIONS',
       reach: 'REACH',
-      daily_unique_reach: 'REACH', // API uses REACH; "daily unique" is a pacing nuance in UI
+      daily_unique_reach: 'REACH',
       maximize_conversations: 'CONVERSATIONS',
       cost_per_conversation: 'CONVERSATIONS',
       maximize_calls: 'QUALITY_CALL',
       cost_per_call: 'QUALITY_CALL',
     },
-
-    // Locations (same as your other tools)
-    locationMap: {
-      PH: ['PH'], SG: ['SG'], MY: ['MY'], TH: ['TH'], VN: ['VN'], ID: ['ID'], IN: ['IN'], JP: ['JP'],
-      KR: ['KR'], CN: ['CN'], HK: ['HK'], TW: ['TW'], AU: ['AU'], NZ: ['NZ'], BD: ['BD'], LK: ['LK'],
-      MM: ['MM'], KH: ['KH'], LA: ['LA'], BN: ['BN'],
-      US: ['US'], CA: ['CA'], MX: ['MX'], BR: ['BR'], AR: ['AR'], CL: ['CL'], CO: ['CO'], PE: ['PE'], VE: ['VE'], EC: ['EC'],
-      GB: ['GB'], DE: ['DE'], FR: ['FR'], IT: ['IT'], ES: ['ES'], NL: ['NL'], BE: ['BE'], CH: ['CH'], AT: ['AT'], SE: ['SE'],
-      NO: ['NO'], DK: ['DK'], FI: ['FI'], PL: ['PL'], RU: ['RU'], UA: ['UA'], TR: ['TR'], GR: ['GR'], PT: ['PT'], IE: ['IE'],
-      CZ: ['CZ'], HU: ['HU'], RO: ['RO'], BG: ['BG'], HR: ['HR'], SI: ['SI'], SK: ['SK'], LT: ['LT'], LV: ['LV'], EE: ['EE'],
-      AE: ['AE'], SA: ['SA'], IL: ['IL'], EG: ['EG'], ZA: ['ZA'], NG: ['NG'], KE: ['KE'], MA: ['MA'], GH: ['GH'], TN: ['TN'],
-      JO: ['JO'], LB: ['LB'], KW: ['KW'], QA: ['QA'], BH: ['BH'], OM: ['OM'],
-      ASEAN: ['PH', 'SG', 'MY', 'TH', 'VN', 'ID', 'MM', 'KH', 'LA', 'BN'],
-      SEA: ['PH', 'SG', 'MY', 'TH', 'VN', 'ID', 'MM', 'KH', 'LA', 'BN'],
-      APAC: ['PH', 'SG', 'MY', 'TH', 'VN', 'ID', 'IN', 'JP', 'KR', 'CN', 'HK', 'TW', 'AU', 'NZ'],
-      EU: ['DE', 'FR', 'IT', 'ES', 'NL', 'BE', 'AT', 'SE', 'DK', 'FI', 'PL', 'GR', 'PT', 'IE', 'CZ', 'HU', 'RO', 'BG', 'HR', 'SI', 'SK', 'LT', 'LV', 'EE'],
-      EUROPE: ['GB', 'DE', 'FR', 'IT', 'ES', 'NL', 'BE', 'CH', 'AT', 'SE', 'NO', 'DK', 'FI', 'PL', 'RU', 'UA', 'TR', 'GR', 'PT', 'IE', 'CZ', 'HU', 'RO', 'BG', 'HR', 'SI', 'SK', 'LT', 'LV', 'EE'],
-      NORTH_AMERICA: ['US', 'CA'],
-      LATIN_AMERICA: ['MX', 'BR', 'AR', 'CL', 'CO', 'PE', 'VE', 'EC'],
-      MIDDLE_EAST: ['AE', 'SA', 'IL', 'JO', 'LB', 'KW', 'QA', 'BH', 'OM'],
-      GCC: ['AE', 'SA', 'KW', 'QA', 'BH', 'OM'],
-      ENGLISH_SPEAKING: ['US', 'GB', 'CA', 'AU', 'NZ', 'IE', 'SG', 'PH', 'IN', 'ZA'],
-      DEVELOPED_MARKETS: ['US', 'GB', 'DE', 'FR', 'IT', 'ES', 'NL', 'CA', 'AU', 'JP', 'KR', 'SG', 'HK'],
-      EMERGING_MARKETS: ['PH', 'MY', 'TH', 'VN', 'ID', 'IN', 'CN', 'BR', 'MX', 'AR', 'TR', 'RU', 'ZA'],
-      worldwide: null,
-    },
-
-    genderMap: { all: [1, 2], male: [1], female: [2] },
-  };
-
-  // ===== Helpers =====
-  const convertPesosToCents = (pesos) => {
-    if (!pesos || pesos <= 0) return null;
-    return Math.round(pesos * 100);
-  };
-
-  const getUserFromAccount = async (accountId) => {
-    const accountIdStr = String(accountId).trim();
-    const { data, error } = await supabase
-      .from('facebook_ad_accounts')
-      .select('user_id, id, name')
-      .eq('id', accountIdStr);
-
-    if (error) throw new Error(`Account lookup failed: ${error.message}`);
-    if (!data || data.length === 0) {
-      throw new Error(`Ad account ${accountIdStr} not found in database.`);
-    }
-    const row = data[0];
-    if (!row.user_id) {
-      throw new Error(`Account ${accountIdStr} has no associated user_id.`);
-    }
-    return row.user_id;
-  };
-
-  const getFacebookToken = async (userId) => {
-    const { data, error } = await supabase
-      .from('users')
-      .select('facebook_long_lived_token')
-      .eq('id', userId)
-      .single();
-
-    if (error) throw new Error(`Supabase query failed: ${error.message}`);
-    return data?.facebook_long_lived_token || null;
-  };
-
-  const getCampaignInfo = async (campaignId, token) => {
-    const API_VERSION = process.env.FACEBOOK_API_VERSION || 'v23.0';
-    const url = `https://graph.facebook.com/${API_VERSION}/${campaignId}?fields=objective,daily_budget,lifetime_budget&access_token=${token}`;
-    const res = await fetch(url);
-    const json = await res.json();
-    if (json.error) throw new Error(`Campaign lookup failed: ${json.error.message}`);
-    return {
-      objective: json.objective,
-      cboEnabled: !!(json.daily_budget || json.lifetime_budget),
-    };
-  };
-
-  const buildTargeting = () => {
-    const targetingObj = { geo_locations: {} };
-
-    if (location && TRAFFIC_CONFIG.locationMap[location]) {
-      if (location !== 'worldwide') {
-        targetingObj.geo_locations.countries = TRAFFIC_CONFIG.locationMap[location];
-      }
-    } else {
-      targetingObj.geo_locations.countries = ['PH'];
-    }
-
-    if (age_min && age_min >= 13) targetingObj.age_min = age_min;
-    if (age_max && age_max <= 65) targetingObj.age_max = age_max;
-
-    if (gender && TRAFFIC_CONFIG.genderMap[gender]) {
-      targetingObj.genders = TRAFFIC_CONFIG.genderMap[gender];
-    }
-
-    if (detailed_targeting === 'custom' && custom_audience_id) {
-      targetingObj.custom_audiences = [custom_audience_id];
-    }
-
-    return targetingObj;
   };
 
   const buildPromotedObject = () => ({
     ...(page_id ? { page_id } : {}),
-    ...(pixel_id ? { pixel_id } : {}), // optional for Traffic
+    ...(pixel_id ? { pixel_id } : {}),
     ...(application_id ? { application_id } : {}),
     ...(custom_event_type ? { custom_event_type } : {}),
   });
 
   // Adjust optimization by location where needed
   const resolveOptimizationGoal = (loc, perfGoal) => {
-    // Calls / Conversations explicit
     if (perfGoal === 'maximize_calls' || perfGoal === 'cost_per_call') return 'QUALITY_CALL';
     if (perfGoal === 'maximize_conversations' || perfGoal === 'cost_per_conversation')
       return 'CONVERSATIONS';
 
-    // Standard traffic goals map 1:1
     if (perfGoal === 'link_clicks') return 'LINK_CLICKS';
     if (perfGoal === 'landing_page_views') return 'LANDING_PAGE_VIEWS';
     if (perfGoal === 'impressions') return 'IMPRESSIONS';
     if (perfGoal === 'reach' || perfGoal === 'daily_unique_reach') return 'REACH';
 
-    // Fallback
     return TRAFFIC_CONFIG.performanceGoals[perfGoal] || 'LINK_CLICKS';
   };
 
-  // ===== Main =====
-  const API_VERSION = process.env.FACEBOOK_API_VERSION || 'v23.0';
-  const baseUrl = `https://graph.facebook.com/${API_VERSION}`;
+  const baseUrl = getBaseUrl();
 
-  // Basic validation
   if (!account_id) return { error: 'Missing required parameter: account_id' };
   if (!campaign_id) return { error: 'Missing required parameter: campaign_id' };
   if (!page_id) return { error: 'Missing required parameter: page_id' };
@@ -294,7 +163,6 @@ const executeFunction = async ({
     };
   }
 
-  // Per-location requireds
   for (const field of locationConfig.requiredFields) {
     if (field === 'page_id' && !page_id) {
       return { error: `page_id is required for conversion location "${conversion_location}"` };
@@ -304,7 +172,6 @@ const executeFunction = async ({
     }
   }
 
-  // Budget validation
   if (budget_type === 'lifetime_budget') {
     if (!lifetime_budget || lifetime_budget <= 0) {
       return { error: 'lifetime_budget is required when budget_type is "lifetime_budget"' };
@@ -321,20 +188,13 @@ const executeFunction = async ({
   }
 
   try {
-    const userId = await getUserFromAccount(account_id);
-    const token = await getFacebookToken(userId);
-    if (!token) {
-      return {
-        error: 'No Facebook access token found for the user who owns this ad account',
-        details: `Account ${account_id} belongs to user ${userId} but they have no Facebook token`,
-      };
-    }
+    const { token } = await resolveToken(account_id);
 
     const campaignInfo = await getCampaignInfo(campaign_id, token);
 
     const adSetName = name || TRAFFIC_CONFIG.defaultName(conversion_location, performance_goal);
     const optimization_goal = resolveOptimizationGoal(conversion_location, performance_goal);
-    const builtTargeting = buildTargeting();
+    const builtTargeting = buildTargeting({ location, age_min, age_max, gender, custom_audience_id });
     const builtPromotedObject = buildPromotedObject();
 
     const url = `${baseUrl}/act_${account_id}/adsets`;
@@ -352,9 +212,8 @@ const executeFunction = async ({
       adSetParams.destination_type = locationConfig.destinationType;
     }
 
-    // CBO handling
     if (campaignInfo.cboEnabled) {
-      // campaign-level budget → no ad set budget
+      // Campaign has CBO enabled - no budget at ad set level
     } else {
       if (budget_type === 'lifetime_budget') {
         const lifetimeBudgetCents = convertPesosToCents(lifetime_budget);
@@ -367,7 +226,6 @@ const executeFunction = async ({
       }
     }
 
-    // Bidding
     if (cost_per_result_goal && cost_per_result_goal > 0) {
       const cprCents = convertPesosToCents(cost_per_result_goal);
       adSetParams.bid_amount = String(cprCents);
@@ -377,18 +235,11 @@ const executeFunction = async ({
     }
     adSetParams.bid_strategy = bid_strategy;
 
-    // Targeting / promoted_object
     adSetParams.targeting = JSON.stringify(builtTargeting);
     adSetParams.promoted_object = JSON.stringify(builtPromotedObject);
 
-    // Strip null/empty
-    for (const [k, v] of Object.entries(adSetParams)) {
-      if (v == null || (typeof v === 'string' && v.trim() === '')) {
-        delete adSetParams[k];
-      }
-    }
-
-    const body = new URLSearchParams(adSetParams);
+    const cleanedParams = clean(adSetParams);
+    const body = new URLSearchParams(cleanedParams);
 
     const response = await fetch(url, {
       method: 'POST',
@@ -445,15 +296,12 @@ const executeFunction = async ({
   }
 };
 
-/**
- * Tool configuration for creating Facebook traffic ad sets
- */
 const apiTool = {
   function: executeFunction,
   definition: {
     type: 'function',
     function: {
-      name: 'create-ad-set-traffic',
+      name: 'create_ad_set_traffic',
       description:
         'Create a Facebook ad set for TRAFFIC campaigns with conversion-location-aware validation.',
       parameters: {
@@ -566,7 +414,6 @@ const apiTool = {
           status: { type: 'string', enum: ['ACTIVE', 'PAUSED'], description: 'Ad set status' },
         },
 
-        // Keep page_id required (your UI expects it)
         required: [
           'account_id',
           'campaign_id',
@@ -575,14 +422,11 @@ const apiTool = {
           'page_id',
         ],
 
-        // Conditional UI requirements
         allOf: [
-          // App requires application_id
           {
             if: { properties: { conversion_location: { const: 'app' } } },
             then: { required: ['application_id'] }
           },
-          // Messenger/IG/Calls (page_id already top-level required; these keep it explicit)
           {
             if: { properties: { conversion_location: { const: 'messenger' } } },
             then: { required: ['page_id'] }
@@ -595,7 +439,6 @@ const apiTool = {
             if: { properties: { conversion_location: { const: 'calls' } } },
             then: { required: ['page_id'] }
           },
-          // Website combos also need page_id (for call/chat part)
           {
             if: { properties: { conversion_location: { const: 'website_and_messenger' } } },
             then: { required: ['page_id'] }
@@ -604,12 +447,10 @@ const apiTool = {
             if: { properties: { conversion_location: { const: 'website_and_calls' } } },
             then: { required: ['page_id'] }
           },
-          // If detailed_targeting is custom, require custom_audience_id
           {
             if: { properties: { detailed_targeting: { const: 'custom' } } },
             then: { required: ['custom_audience_id'] }
           },
-          // If budget_type is lifetime, require lifetime_budget, start_time, end_time
           {
             if: { properties: { budget_type: { const: 'lifetime_budget' } } },
             then: { required: ['lifetime_budget', 'start_time', 'end_time'] }

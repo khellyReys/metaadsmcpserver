@@ -1,77 +1,65 @@
 /**
- * Function to copy an ad in the Facebook Marketing API.
- *
- * @param {Object} args - Arguments for the ad copy.
- * @param {string} args.ad_id_awareness - The ID of the ad to be copied.
- * @param {string} args.token - The access token for authentication.
- * @param {string} [args.status_option="PAUSED"] - The status option for the copied ad.
- * @param {Object} [args.rename_options={}] - Options for renaming the copied ad.
- * @returns {Promise<Object>} - The result of the ad copy operation.
+ * Copy an ad in the Facebook Marketing API.
  */
-const executeFunction = async ({ ad_id_awareness, token, status_option = 'PAUSED', rename_options = { rename_strategy: 'ONLY_TOP_LEVEL_RENAME' } }) => {
-  const baseUrl = ''; // Base URL should be defined by the user
-  const url = `${baseUrl}/${ad_id_awareness}/copies?status_option=${status_option}&rename_options=${encodeURIComponent(JSON.stringify(rename_options))}`;
-  
-  try {
-    // Set up headers for the request
-    const headers = {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    };
+import { getSupabaseClient, getTokenForUser } from './_token-utils.js';
+import { getBaseUrl, safeFacebookError } from './_shared-helpers.js';
 
-    // Perform the fetch request
-    const response = await fetch(url, {
+const executeFunction = async ({ userId, ad_id, status_option = 'PAUSED', rename_options = { rename_strategy: 'ONLY_TOP_LEVEL_RENAME' } }) => {
+  const supabase = getSupabaseClient();
+  const token = await getTokenForUser(supabase, userId);
+  if (!token) return { error: 'No Facebook access token found for this user' };
+
+  try {
+    const url = new URL(`${getBaseUrl()}/${ad_id}/copies`);
+    url.searchParams.append('status_option', status_option);
+    url.searchParams.append('rename_options', JSON.stringify(rename_options));
+
+    const response = await fetch(url.toString(), {
       method: 'POST',
-      headers
+      headers: { 'Authorization': `Bearer ${token}` }
     });
 
-    // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
-      throw new Error(errorData);
+      throw new Error(safeFacebookError(errorData));
     }
 
-    // Parse and return the response data
-    const data = await response.json();
-    return data;
+    return await response.json();
   } catch (error) {
-    return { error: 'An error occurred while copying the ad.' };
+    console.error('Error copying ad:', error);
+    return { error: 'An error occurred while copying the ad.', details: error.message };
   }
 };
 
-/**
- * Tool configuration for copying an ad in the Facebook Marketing API.
- * @type {Object}
- */
 const apiTool = {
   function: executeFunction,
   definition: {
     type: 'function',
     function: {
-      name: 'CopiesAd',
+      name: 'copy_ad',
       description: 'Copy an ad in the Facebook Marketing API.',
       parameters: {
         type: 'object',
         properties: {
-          ad_id_awareness: {
+          userId: {
             type: 'string',
-            description: 'The ID of the ad to be copied.'
+            description: 'The user ID (Supabase auth) to retrieve the Facebook token.'
           },
-          token: {
+          ad_id: {
             type: 'string',
-            description: 'The access token for authentication.'
+            description: 'The ID of the ad to copy.'
           },
           status_option: {
             type: 'string',
             enum: ['PAUSED', 'ACTIVE', 'ARCHIVED'],
-            description: 'The status option for the copied ad.'
+            description: 'The status for the copied ad (default: PAUSED).'
           },
           rename_options: {
             type: 'object',
-            description: 'Options for renaming the copied ad.'
+            description: 'Options for renaming the copied ad (default: ONLY_TOP_LEVEL_RENAME).'
           }
         },
-        required: ['ad_id_awareness', 'token']
+        required: ['userId', 'ad_id']
       }
     }
   }

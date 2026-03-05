@@ -3,14 +3,19 @@
  *
  * @param {Object} args - Arguments for the pixel details request.
  * @param {string} args.account_id - The Ad Account ID to retrieve pixel details for.
- * @param {string} [args.base_url='https://graph.facebook.com/v12.0'] - The base URL for the Facebook Graph API.
+ * @param {string} [args.base_url] - The base URL for the Facebook Graph API (optional).
  * @returns {Promise<Object>} - The result of the pixel details request.
  */
-const executeFunction = async ({ account_id, base_url = 'https://graph.facebook.com/v12.0' }) => {
-  const token = process.env.FACEBOOK_MARKETING_API_API_KEY;
+import { getSupabaseClient, getTokenForAccount } from './_token-utils.js';
+
+const executeFunction = async ({ account_id, base_url }) => {
+  const base = base_url || `https://graph.facebook.com/${process.env.FACEBOOK_API_VERSION || 'v22.0'}`;
+  const supabase = getSupabaseClient();
+  const token = await getTokenForAccount(supabase, account_id);
+  if (!token) return { error: 'No Facebook access token found for this ad account' };
   try {
     // Construct the URL for the request
-    const url = `${base_url}/act_${account_id}/adspixels?fields=name,id,code,last_fired_time`;
+    const url = `${base}/act_${account_id}/adspixels?fields=name,id,code,last_fired_time`;
 
     // Set up headers for the request
     const headers = {
@@ -49,7 +54,7 @@ const apiTool = {
   definition: {
     type: 'function',
     function: {
-      name: 'GetPixelDetails',
+      name: 'get_pixel_details',
       description: 'Get pixel details from the Facebook Marketing API.',
       parameters: {
         type: 'object',
@@ -60,7 +65,7 @@ const apiTool = {
           },
           base_url: {
             type: 'string',
-            description: 'The base URL for the Facebook Graph API.'
+            description: 'The base URL for the Facebook Graph API (optional).'
           }
         },
         required: ['account_id']

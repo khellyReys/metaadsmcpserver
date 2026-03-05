@@ -1,5 +1,11 @@
 # Node modules
 node_modules/
 
+# Build output (may contain injected env / secrets from .env)
+dist/
+
 # Environment variables
 .env*
+
+# Debug logs (may contain env keys)
+debug*.log

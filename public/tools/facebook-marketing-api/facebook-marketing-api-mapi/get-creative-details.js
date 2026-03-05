@@ -3,53 +3,39 @@
  *
  * @param {Object} args - Arguments for the request.
  * @param {string} args.adCreativeId - The ID of the ad creative to retrieve details for.
+ * @param {string} args.userId - The user ID to retrieve the Facebook token from Supabase.
+ * @param {string} [args.base_url] - The base URL for the Facebook Graph API (optional).
  * @returns {Promise<Object>} - The details of the ad creative.
  */
-const executeFunction = async ({ adCreativeId }) => {
-  const baseUrl = ''; // will be provided by the user
-  const token = process.env.FACEBOOK_MARKETING_API_API_KEY;
+import { getSupabaseClient, getTokenForUser } from './_token-utils.js';
+
+const executeFunction = async ({ adCreativeId, userId, base_url }) => {
+  const base = base_url || `https://graph.facebook.com/${process.env.FACEBOOK_API_VERSION || 'v22.0'}`;
+  const supabase = getSupabaseClient();
+  const token = await getTokenForUser(supabase, userId);
+  if (!token) return { error: 'No Facebook access token found for this user' };
   try {
-    // Construct the URL for the request
-    const url = `${baseUrl}/${adCreativeId}/?fields=name,object_story_id,object_story_spec{},object_type,image_hash,video_id,body,title,status`;
-
-    // Set up headers for the request
-    const headers = {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    };
-
-    // Perform the fetch request
-    const response = await fetch(url, {
-      method: 'GET',
-      headers
-    });
-
-    // Check if the response was successful
+    const url = `${base}/${adCreativeId}/?fields=name,object_story_id,object_story_spec{},object_type,image_hash,video_id,body,title,status`;
+    const headers = { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' };
+    const response = await fetch(url, { method: 'GET', headers });
     if (!response.ok) {
       const errorData = await response.json();
       console.error('Error getting creative details:', JSON.stringify(errorData));
-      throw new Error(errorData);
+      throw new Error(errorData?.error?.message || response.statusText);
     }
-
-    // Parse and return the response data
-    const data = await response.json();
-    return data;
+    return await response.json();
   } catch (error) {
     console.error('Error getting creative details:', error);
-    return { error: 'An error occurred while retrieving creative details.' };
+    return { error: error.message || 'An error occurred while retrieving creative details.' };
   }
 };
 
-/**
- * Tool configuration for getting creative details from the Facebook Marketing API.
- * @type {Object}
- */
 const apiTool = {
   function: executeFunction,
   definition: {
     type: 'function',
     function: {
-      name: 'GetCreativeDetails',
+      name: 'get_creative_details',
       description: 'Retrieve details of a specific ad creative.',
       parameters: {
         type: 'object',
@@ -57,9 +43,17 @@ const apiTool = {
           adCreativeId: {
             type: 'string',
             description: 'The ID of the ad creative to retrieve details for.'
+          },
+          userId: {
+            type: 'string',
+            description: 'The user ID (Supabase auth) to retrieve the Facebook token.'
+          },
+          base_url: {
+            type: 'string',
+            description: 'The base URL for the Facebook Graph API (optional).'
           }
         },
-        required: ['adCreativeId']
+        required: ['adCreativeId', 'userId']
       }
     }
   }

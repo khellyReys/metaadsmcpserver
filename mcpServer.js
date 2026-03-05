@@ -12,16 +12,23 @@ import dotenv from "dotenv";
 import express from "express";
 import cors from "cors";
 import path from "path";
+import fs from "fs";
+import http from "http";
+import https from "https";
 import { fileURLToPath } from "url";
+import { randomUUID } from "node:crypto";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
   McpError,
   ErrorCode,
+  isInitializeRequest,
 } from "@modelcontextprotocol/sdk/types.js";
 import { discoverTools } from "./lib/tools.js";
+import { getSupabaseClient, getTokenForUser, setFallbackToken, clearFallbackToken } from "./public/tools/facebook-marketing-api/facebook-marketing-api-mapi/_token-utils.js";
 
 // ---- Env setup ----
 dotenv.config({
@@ -73,13 +80,13 @@ async function setupServerHandlers(server, tools) {
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const name = request.params.name;
-    const tool = tools.find((t) => t.definition.function.name === name);
+    const tool = tools.find((t) => t.definition?.function?.name === name);
     if (!tool) {
       throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
     }
 
     const args = request.params.arguments ?? {};
-    const required = tool.definition.function.parameters.required || [];
+    const required = tool.definition?.function?.parameters?.required || [];
     for (const param of required) {
       if (!(param in args)) {
         throw new McpError(
@@ -89,16 +96,41 @@ async function setupServerHandlers(server, tools) {
       }
     }
 
+    // Ensure the ad account → user mapping exists in DB so all tools can resolve the token
+    if (args.userId && args.account_id) {
+      try {
+        const supabase = getSupabaseClient();
+        const accountIdStr = String(args.account_id).trim().replace(/^act_/, '');
+        await supabase.from('facebook_ad_accounts').upsert(
+          { id: accountIdStr, user_id: args.userId },
+          { onConflict: 'id', ignoreDuplicates: false }
+        );
+      } catch {
+        // Best-effort; tools will fall back to their own lookup
+      }
+    }
+    // Set fallback token from userId in case some tools don't do account lookup at all
+    if (args.userId) {
+      try {
+        const supabase = getSupabaseClient();
+        const token = await getTokenForUser(supabase, args.userId);
+        if (token) setFallbackToken(token);
+      } catch {
+        // Best-effort fallback
+      }
+    }
+
     try {
       const result = await tool.function(args);
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
       };
     } catch (err) {
-      throw new McpError(
-        ErrorCode.InternalError,
-        `Tool execution failed: ${err.message}`
-      );
+      const isProd = process.env.NODE_ENV === "production";
+      const message = isProd ? "Tool execution failed." : `Tool execution failed: ${err.message}`;
+      throw new McpError(ErrorCode.InternalError, message);
+    } finally {
+      clearFallbackToken();
     }
   });
 }
@@ -166,12 +198,8 @@ async function run() {
     const transports = {};
     const servers = {};
 
-    // CORS (adjust to your frontend origins)
-    const allowedOrigins = [
-      "http://localhost:3000",
-      "https://localhost:3000",
-      "http://localhost:5173",
-      "https://localhost:5173",
+    // CORS — allow any localhost port (for dev) plus production Render origins
+    const prodOrigins = [
       "https://metaadsmcpserver-1.onrender.com",
       "https://metaadsmcpserver.onrender.com",
     ];
@@ -180,64 +208,62 @@ async function run() {
       cors({
         origin: (incomingOrigin, callback) => {
           if (!incomingOrigin) return callback(null, true);
-          if (allowedOrigins.includes(incomingOrigin)) return callback(null, true);
+          if (/^https?:\/\/localhost(:\d+)?$/.test(incomingOrigin)) return callback(null, true);
+          if (prodOrigins.includes(incomingOrigin)) return callback(null, true);
           return callback(new Error(`Origin ${incomingOrigin} not allowed by CORS`));
         },
-        methods: ["GET", "POST", "OPTIONS"],
+        methods: ["GET", "POST", "DELETE", "OPTIONS"],
         allowedHeaders: [
           "Content-Type",
           "Authorization",
           "Cache-Control",
           "X-Requested-With",
+          "Mcp-Session-Id",
         ],
+        exposedHeaders: ["Mcp-Session-Id"],
         credentials: true,
       })
     );
 
-    // CRITICAL: Global request logger to see what routes are being hit
+    // Request logger: do not log headers or token (security)
     app.use((req, res, next) => {
-      console.log(`[${new Date().toISOString()}] ${req.method} ${req.path} from ${req.headers.origin || 'no-origin'}`);
-      console.log(`[HEADERS]`, req.headers);
+      const q = req.query && Object.keys(req.query).length ? Object.keys(req.query).filter(k => k !== 'token').join(',') : '';
+      console.log(`[${new Date().toISOString()}] ${req.method} ${req.path} from ${req.headers.origin || 'no-origin'}${q ? ` query: ${q}` : ''}`);
       next();
     });
 
     // ===== API ROUTES FIRST - THESE MUST COME BEFORE ANY STATIC SERVING =====
     
-    // Health endpoint
+    // Health endpoint (no session count to avoid information disclosure)
     app.get("/health", (req, res) => {
-      console.log('[HEALTH] Route hit');
       res.json({
         status: "ok",
         server: SERVER_NAME,
-        activeSessions: Object.keys(transports).length,
         node: process.version,
         mode: "SSE",
         timestamp: new Date().toISOString()
       });
     });
 
-    // Preflight for SSE
-    app.options("/api/sse", (req, res) => {
-      console.log('[PREFLIGHT] /api/sse route hit');
+    // Preflight for SSE and Streamable HTTP
+    app.options(["/api/sse", "/api/mcp"], (req, res) => {
+      console.log(`[PREFLIGHT] ${req.path} route hit`);
       res.setHeader("Access-Control-Allow-Origin", req.headers.origin || "*");
-      res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
       res.setHeader(
         "Access-Control-Allow-Headers",
-        "Content-Type, Authorization, Cache-Control, X-Requested-With"
+        "Content-Type, Authorization, Cache-Control, X-Requested-With, Mcp-Session-Id"
       );
+      res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
       res.setHeader("Access-Control-Allow-Credentials", "true");
       res.status(200).end();
     });
 
     // CHANGE: Use /api/sse instead of /sse to avoid conflicts
     app.get("/api/sse", async (req, res) => {
-      console.log('[SSE] /api/sse route hit');
       const origin = req.headers.origin;
-      
       try {
-        console.log("[SSE] Incoming connection from:", origin);
-        console.log("[SSE] Query params:", req.query);
-        
+        console.log("[SSE] Incoming connection from:", origin || "no-origin");
         // Validate token first before setting headers
         const token = req.query.token;
         if (!token) {
@@ -246,6 +272,7 @@ async function run() {
         
         const tokenData = validateToken(token);
         console.log("[SSE] Token validated for serverId:", tokenData.serverId);
+        // Do not log token or query params
 
         // Set SSE headers BEFORE creating transport
         setSSEHeaders(res, origin);
@@ -325,13 +352,13 @@ async function run() {
       }
     });
 
-    // Only parse JSON for non-/api/messages routes (SDK uses raw body)
+    // Parse JSON for all routes except those where the SDK handles raw body
     app.use((req, res, next) => {
-      if (req.path === "/api/messages") return next();
+      if (req.path === "/api/messages" || req.path === "/api/mcp") return next();
       return express.json()(req, res, next);
     });
 
-    // JSON-RPC companion endpoint - CHANGE: Use /api/messages
+    // JSON-RPC companion endpoint for SSE transport
     app.post("/api/messages", async (req, res) => {
       console.log('[MESSAGES] /api/messages route hit');
       try {
@@ -342,17 +369,114 @@ async function run() {
         if (transport && server) {
           await transport.handlePostMessage(req, res);
         } else {
-          console.error("[/api/messages] No transport/server found for sessionId:", sessionId);
-          console.error("[/api/messages] Available sessions:", Object.keys(transports));
+          console.error("[/api/messages] No transport found for sessionId (session expired or invalid)");
           res.status(400).json({
-            error: "No transport/server found for sessionId",
-            sessionId: sessionId,
-            availableSessions: Object.keys(transports),
+            error: "Session not found or expired. Please reconnect to the MCP server.",
           });
         }
       } catch (error) {
         console.error("[/api/messages error]", error && error.stack ? error.stack : error);
-        res.status(500).json({ error: error.message || String(error) });
+        const isProd = process.env.NODE_ENV === "production";
+        res.status(500).json({
+          error: isProd ? "Internal server error." : (error.message || String(error)),
+        });
+      }
+    });
+
+    // ===== STREAMABLE HTTP TRANSPORT (protocol version 2025-03-26) =====
+    // Single endpoint handles GET (SSE stream), POST (JSON-RPC), DELETE (session teardown)
+    app.all("/api/mcp", express.json(), async (req, res) => {
+      console.log(`[MCP-HTTP] ${req.method} /api/mcp`);
+
+      // Validate token from query param or Authorization header
+      let tokenData;
+      try {
+        const tokenParam = req.query.token;
+        const authHeader = req.headers.authorization;
+        let rawToken;
+        if (tokenParam) {
+          rawToken = tokenParam;
+        } else if (authHeader && authHeader.startsWith("Bearer ")) {
+          rawToken = authHeader.slice(7);
+        }
+        if (!rawToken) {
+          return res.status(401).json({
+            jsonrpc: "2.0",
+            error: { code: -32000, message: "Authentication required. Provide token as query param or Bearer header." },
+            id: null,
+          });
+        }
+        tokenData = validateToken(rawToken);
+      } catch (err) {
+        return res.status(401).json({
+          jsonrpc: "2.0",
+          error: { code: -32000, message: err.message },
+          id: null,
+        });
+      }
+
+      try {
+        const sessionId = req.headers["mcp-session-id"];
+        let transport;
+
+        if (sessionId && transports[sessionId]) {
+          const existing = transports[sessionId];
+          if (existing instanceof StreamableHTTPServerTransport) {
+            transport = existing;
+          } else {
+            return res.status(400).json({
+              jsonrpc: "2.0",
+              error: { code: -32000, message: "Session exists but uses a different transport protocol" },
+              id: null,
+            });
+          }
+        } else if (!sessionId && req.method === "POST" && isInitializeRequest(req.body)) {
+          transport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: () => randomUUID(),
+            onsessioninitialized: (sid) => {
+              console.log(`[MCP-HTTP] Session initialized: ${sid} for serverId: ${tokenData.serverId}`);
+              transports[sid] = transport;
+            },
+          });
+
+          transport.onclose = () => {
+            const sid = transport.sessionId;
+            if (sid && transports[sid]) {
+              console.log(`[MCP-HTTP] Session closed: ${sid}`);
+              delete transports[sid];
+              delete servers[sid];
+            }
+          };
+
+          const server = new Server(
+            { name: SERVER_NAME, version: "0.1.0" },
+            { capabilities: { tools: {} } }
+          );
+          server.onerror = (err) => console.error("[MCP-HTTP server error]", err);
+          await setupServerHandlers(server, tools);
+          await server.connect(transport);
+
+          if (transport.sessionId) {
+            servers[transport.sessionId] = server;
+          }
+        } else {
+          return res.status(400).json({
+            jsonrpc: "2.0",
+            error: { code: -32000, message: "Bad Request: No valid session ID provided" },
+            id: null,
+          });
+        }
+
+        await transport.handleRequest(req, res, req.body);
+      } catch (error) {
+        console.error("[/api/mcp error]", error && error.stack ? error.stack : error);
+        if (!res.headersSent) {
+          res.status(500).json({
+            jsonrpc: "2.0",
+            error: { code: -32603, message: "Internal server error" },
+            id: null,
+          });
+        }
       }
     });
 
@@ -398,13 +522,31 @@ async function run() {
       });
     });
 
-    // Handle specific common SPA routes if needed
+    // Handle specific common SPA routes (dashboard step-based URLs and workspace)
     app.get('/workspace', (req, res) => {
       console.log('[WORKSPACE] Serving index.html for workspace route');
       const indexPath = path.join(__dirname, 'dist', 'index.html');
       res.sendFile(indexPath, (err) => {
         if (err) {
           console.error('[WORKSPACE] Error serving index.html:', err);
+          res.status(404).send('Page not found');
+        }
+      });
+    });
+    app.get('/dashboard', (req, res) => {
+      const indexPath = path.join(__dirname, 'dist', 'index.html');
+      res.sendFile(indexPath, (err) => {
+        if (err) {
+          console.error('[DASHBOARD] Error serving index.html:', err);
+          res.status(404).send('Page not found');
+        }
+      });
+    });
+    app.get('/dashboard/{*splat}', (req, res) => {
+      const indexPath = path.join(__dirname, 'dist', 'index.html');
+      res.sendFile(indexPath, (err) => {
+        if (err) {
+          console.error('[DASHBOARD] Error serving index.html:', err);
           res.status(404).send('Page not found');
         }
       });
@@ -416,21 +558,43 @@ async function run() {
       if (res.headersSent) {
         return next(error);
       }
+      const isProd = process.env.NODE_ENV === "production";
       res.status(500).json({
         error: "Internal server error",
-        message: error.message
+        message: isProd ? undefined : error.message,
       });
     });
 
     const port = process.env.PORT || 3001;
-    app.listen(port, () => {
-      console.log(`MCP SSE server listening on http://localhost:${port}`);
-      console.log(`Health: http://localhost:${port}/health`);
-      console.log(`SSE: http://localhost:${port}/api/sse`);
+
+    // Use HTTPS locally if cert files exist, plain HTTP otherwise (e.g. on Render)
+    const __filename2 = fileURLToPath(import.meta.url);
+    const __dirname2 = path.dirname(__filename2);
+    const keyPath = path.join(__dirname2, 'localhost-key.pem');
+    const certPath = path.join(__dirname2, 'localhost-cert.pem');
+    const hasCerts = fs.existsSync(keyPath) && fs.existsSync(certPath);
+    const netServer = hasCerts
+      ? https.createServer({ key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) }, app)
+      : http.createServer(app);
+    const protocol = hasCerts ? 'https' : 'http';
+
+    netServer.on('error', (err) => {
+      console.error(`[server error] ${err.message}`);
+      if (err.code === 'EADDRINUSE') {
+        console.error(`Port ${port} is already in use. Stop the other process or set PORT=<other> in .env`);
+      }
+      process.exit(1);
+    });
+
+    netServer.listen(port, () => {
+      console.log(`MCP server listening on ${protocol}://localhost:${port}`);
+      console.log(`Health:          ${protocol}://localhost:${port}/health`);
+      console.log(`SSE (legacy):    ${protocol}://localhost:${port}/api/sse`);
+      console.log(`Streamable HTTP: ${protocol}://localhost:${port}/api/mcp`);
       console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
       console.log(`Static files: ${distPath}`);
-      // Clear keepalive once we're listening (server keeps event loop alive)
-      clearInterval(keepalive);
+      // keepalive stays active — the server socket keeps the event loop alive,
+      // but we keep the interval as a safety net on Windows where socket ref can be tricky.
     });
   } else {
     // STDIO mode (single session over stdin/stdout)

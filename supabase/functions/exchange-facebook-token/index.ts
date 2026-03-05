@@ -1,9 +1,27 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+const DEFAULT_ALLOWED_ORIGINS = [
+  'http://localhost:3000',
+  'https://localhost:3000',
+  'http://localhost:5173',
+  'https://localhost:5173',
+  'https://metaadsmcpserver-1.onrender.com',
+  'https://metaadsmcpserver.onrender.com',
+]
+
+function getAllowedOrigins(): string[] {
+  const env = Deno.env.get('ALLOWED_ORIGINS')
+  if (env?.trim()) return env.split(',').map((o) => o.trim()).filter(Boolean)
+  return DEFAULT_ALLOWED_ORIGINS
+}
+
+function getCorsHeaders(origin: string | null): Record<string, string> {
+  const allowed = getAllowedOrigins()
+  const allowOrigin = origin && allowed.includes(origin) ? origin : (allowed[0] ?? '*')
+  return {
+    'Access-Control-Allow-Origin': allowOrigin,
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  }
 }
 
 interface TokenExchangeRequest {
@@ -58,6 +76,9 @@ interface RateLimitState {
 const rateLimits = new Map<string, RateLimitState>();
 
 serve(async (req) => {
+  const origin = req.headers.get('origin')
+  const corsHeaders = getCorsHeaders(origin)
+
   // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -117,7 +138,7 @@ serve(async (req) => {
     }
 
     // Parse request body
-    const { shortLivedToken, userId }: TokenExchangeRequest = await req.json()
+    const { shortLivedToken }: TokenExchangeRequest = await req.json()
 
     if (!shortLivedToken) {
       return new Response(
@@ -231,7 +252,7 @@ serve(async (req) => {
       } else if (permissionsData.error) {
         // Don't fail the whole request, just log the warning
       }
-    } catch (permError) {
+    } catch {
       // Don't fail the whole request
     }
 
@@ -258,15 +279,15 @@ serve(async (req) => {
           scopes: debugData.data.scopes || []
         }
       }
-    } catch (debugError) {
+    } catch {
+      // Debug token fetch failed, continue with basic tokenInfo
     }
 
-    // Step 6: Return successful response with comprehensive data
+    // Step 6: Return successful response (do not include shortLivedToken)
     return new Response(
       JSON.stringify({
         success: true,
         longLivedToken: exchangeData.access_token,
-        shortLivedToken: shortLivedToken, // Include for reference
         expiresIn: expiresIn,
         expiresAt: expiresAt.toISOString(),
         tokenType: exchangeData.token_type || 'bearer',
@@ -309,7 +330,6 @@ Response:
 {
   "success": true,
   "longLivedToken": "EAABC456...",
-  "shortLivedToken": "EAABC123...",
   "expiresIn": 5184000,
   "expiresAt": "2024-03-15T10:30:00.000Z",
   "tokenType": "bearer",
@@ -328,4 +348,5 @@ Response:
 Environment Variables Required:
 - FACEBOOK_APP_ID: Your Facebook App ID
 - FACEBOOK_APP_SECRET: Your Facebook App Secret
+- ALLOWED_ORIGINS (optional): Comma-separated origins for CORS; defaults to localhost and Render URLs
 */

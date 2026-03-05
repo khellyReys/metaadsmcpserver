@@ -1,39 +1,39 @@
 /**
- * Function to generate a report breakdown for Facebook Ads.
- *
- * @param {Object} args - Arguments for generating the report.
- * @param {string} args.account_id - The Ad Account ID.
- * @param {string} args.report_attribution_id2 - The report attribution ID.
- * @param {string} args.token - The access token for authorization.
- * @param {string} [args.level="ad"] - The level of breakdown (e.g., ad, campaign).
- * @param {Object} [args.time_range] - The time range for the report.
- * @param {string} [args.breakdowns="hourly_stats_aggregated_by_advertiser_time_zone"] - The breakdowns for the report.
- * @param {string} [args.action_breakdowns='["action_type"]'] - The action breakdowns for the report.
- * @param {string} [args.action_attribution_windows='["1d_click","7d_click","28d_click","1d_view","7d_view","28d_view"]'] - The action attribution windows.
- * @param {string} [args.fields='["actions","action_values","ad_id","clicks","impressions","reach","spend","account_currency","unique_clicks","video_thruplay_watched_actions","video_30_sec_watched_actions","video_avg_time_watched_actions","video_p100_watched_actions","video_p25_watched_actions","video_p50_watched_actions","video_p75_watched_actions","video_p95_watched_actions"]'] - The fields to include in the report.
- * @param {string} [args.time_increment="1"] - The time increment for the report.
- * @returns {Promise<Object>} - The result of the report generation.
+ * Generate an async report breakdown for Facebook Ads insights.
  */
-const executeFunction = async ({ account_id, report_attribution_id2, token, level = 'ad', time_range = { since: '2023-04-26', until: '2023-05-28' }, breakdowns = 'hourly_stats_aggregated_by_advertiser_time_zone', action_breakdowns = '["action_type"]', action_attribution_windows = '["1d_click","7d_click","28d_click","1d_view","7d_view","28d_view"]', fields = '["actions","action_values","ad_id","clicks","impressions","reach","spend","account_currency","unique_clicks","video_thruplay_watched_actions","video_30_sec_watched_actions","video_avg_time_watched_actions","video_p100_watched_actions","video_p25_watched_actions","video_p50_watched_actions","video_p75_watched_actions","video_p95_watched_actions"]', time_increment = "1" }) => {
-  const baseUrl = ''; // Base URL will be provided by the user
+import { getSupabaseClient, getTokenForAccount } from './_token-utils.js';
+import { getBaseUrl, normalizeAccountId, safeFacebookError } from './_shared-helpers.js';
+
+const DEFAULT_FIELDS = '["actions","action_values","ad_id","clicks","impressions","reach","spend","account_currency","unique_clicks","video_thruplay_watched_actions","video_30_sec_watched_actions","video_avg_time_watched_actions","video_p100_watched_actions","video_p25_watched_actions","video_p50_watched_actions","video_p75_watched_actions","video_p95_watched_actions"]';
+
+const executeFunction = async ({
+  account_id,
+  level = 'ad',
+  time_range,
+  breakdowns = 'hourly_stats_aggregated_by_advertiser_time_zone',
+  action_breakdowns = '["action_type"]',
+  action_attribution_windows = '["1d_click","7d_click","1d_view"]',
+  fields,
+  time_increment = '1'
+}) => {
+  const supabase = getSupabaseClient();
+  const acctId = normalizeAccountId(account_id);
+  const token = await getTokenForAccount(supabase, acctId);
+  if (!token) return { error: 'No Facebook access token found for this ad account' };
+
   try {
-    // Construct the URL for the request
-    const url = `${baseUrl}/act_${account_id}/insights?${report_attribution_id2}`;
-    
-    // Set up the request body
+    const url = `${getBaseUrl()}/act_${acctId}/insights`;
+
     const body = {
       level,
-      time_range,
+      time_range: time_range || { since: new Date(Date.now() - 30 * 86400000).toISOString().split('T')[0], until: new Date().toISOString().split('T')[0] },
       breakdowns,
       action_breakdowns,
       action_attribution_windows,
-      fields,
+      fields: fields || DEFAULT_FIELDS,
       time_increment,
-      graphapi_sample: true,
-      graphapi_user: '511439423'
     };
 
-    // Perform the fetch request
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -43,78 +43,67 @@ const executeFunction = async ({ account_id, report_attribution_id2, token, leve
       body: JSON.stringify(body)
     });
 
-    // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
-      console.error('Error generating report breakdown:', JSON.stringify(errorData));
-      throw new Error(errorData);
+      throw new Error(safeFacebookError(errorData));
     }
 
-    // Parse and return the response data
-    const data = await response.json();
-    return data;
+    return await response.json();
   } catch (error) {
     console.error('Error generating report breakdown:', error);
-    return { error: 'An error occurred while generating the report breakdown.' };
+    return { error: 'An error occurred while generating the report breakdown.', details: error.message };
   }
 };
 
-/**
- * Tool configuration for generating report breakdowns for Facebook Ads.
- * @type {Object}
- */
 const apiTool = {
   function: executeFunction,
   definition: {
     type: 'function',
     function: {
-      name: 'ReportidBreakdownGenerate',
-      description: 'Generate a report breakdown for Facebook Ads.',
+      name: 'generate_report_breakdown',
+      description: 'Generate an async report breakdown for Facebook Ads with configurable fields, breakdowns, and attribution windows.',
       parameters: {
         type: 'object',
         properties: {
           account_id: {
             type: 'string',
-            description: 'The Ad Account ID.'
-          },
-          report_attribution_id2: {
-            type: 'string',
-            description: 'The report attribution ID.'
-          },
-          token: {
-            type: 'string',
-            description: 'The access token for authorization.'
+            description: 'The Ad Account ID (without act_ prefix).'
           },
           level: {
             type: 'string',
-            description: 'The level of breakdown (e.g., ad, campaign).'
+            enum: ['account', 'campaign', 'adset', 'ad'],
+            description: 'Reporting level (default: ad).'
           },
           time_range: {
             type: 'object',
-            description: 'The time range for the report.'
+            properties: {
+              since: { type: 'string', description: 'Start date (YYYY-MM-DD)' },
+              until: { type: 'string', description: 'End date (YYYY-MM-DD)' }
+            },
+            description: 'Time range for the report (default: last 30 days).'
           },
           breakdowns: {
             type: 'string',
-            description: 'The breakdowns for the report.'
+            description: 'Breakdowns (default: hourly_stats_aggregated_by_advertiser_time_zone).'
           },
           action_breakdowns: {
             type: 'string',
-            description: 'The action breakdowns for the report.'
+            description: 'Action breakdowns as JSON array (default: ["action_type"]).'
           },
           action_attribution_windows: {
             type: 'string',
-            description: 'The action attribution windows.'
+            description: 'Attribution windows as JSON array (default: ["1d_click","7d_click","1d_view"]).'
           },
           fields: {
             type: 'string',
-            description: 'The fields to include in the report.'
+            description: 'Fields as JSON array (optional, uses comprehensive defaults).'
           },
           time_increment: {
             type: 'string',
-            description: 'The time increment for the report.'
+            description: 'Time increment: "1" for daily, "7" for weekly (default: 1).'
           }
         },
-        required: ['account_id', 'report_attribution_id2', 'token']
+        required: ['account_id']
       }
     }
   }

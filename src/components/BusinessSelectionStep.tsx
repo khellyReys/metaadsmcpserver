@@ -1,6 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowRight, Building2, Users, CheckCircle, AlertCircle, RefreshCw, Server, FileText } from 'lucide-react';
+import { ArrowRight, Building2, Users, CheckCircle, AlertCircle, RefreshCw, FileText, Search, ChevronLeft, ChevronRight, User } from 'lucide-react';
+import Spinner from './Spinner';
 import { SupabaseClient } from '@supabase/supabase-js';
+import { fetchWithTimeout, promiseWithTimeout } from '../lib/asyncUtils';
+import { useVisibilityReset } from '../hooks/useVisibilityReset';
 
 interface BusinessAccount {
   id: string;
@@ -9,6 +12,17 @@ interface BusinessAccount {
   status: string;
   adAccountsCount: number;
 }
+
+/** Sentinel id for the virtual "Personal Ad Accounts" option (ad accounts not linked to a business). */
+const PERSONAL_BUSINESS_ID = '__personal__';
+
+const PERSONAL_BUSINESS_OPTION: BusinessAccount = {
+  id: PERSONAL_BUSINESS_ID,
+  name: 'Personal Ad Accounts',
+  business_role: 'Personal',
+  status: 'active',
+  adAccountsCount: 0,
+};
 
 interface AdAccount {
   id: string;
@@ -42,7 +56,7 @@ interface Server {
 }
 
 interface BusinessSelectionStepProps {
-  currentUser: any;
+  currentUser: { id: string };
   selectedServer: string;
   servers: Server[];
   businessAccounts: BusinessAccount[];
@@ -55,14 +69,21 @@ interface BusinessSelectionStepProps {
     businessId: string,
     adAccountId: string,
     pageId: string,
-    serverAccessToken: string
+    serverAccessToken: string,
+    userId?: string
   ) => void;
   onBusinessSelectionChange: (businessId: string) => void;
   onBusinessAccountsChange: (accounts: BusinessAccount[]) => void;
   onBackToServers: () => void;
+  onBackToBusiness?: () => void;
+  onBackToAdAccounts?: () => void;
+  onAdvanceToAdAccount?: () => void;
+  onAdvanceToPage?: () => void;
   onClearError: () => void;
   supabase: SupabaseClient;
   onFetchingProgress?: (progress: number, message: string) => void;
+  initialStep?: 'business' | 'adaccount' | 'page';
+  initialAdAccountId?: string;
 }
 
 const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
@@ -77,209 +98,310 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
   onBusinessSelectionChange,
   onBusinessAccountsChange,
   onBackToServers,
+  onBackToBusiness,
+  onBackToAdAccounts,
+  onAdvanceToAdAccount,
+  onAdvanceToPage,
   onClearError,
   supabase,
   onFetchingProgress = () => {},
+  initialStep,
+  initialAdAccountId,
 }) => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  
-  // Updated state for multi-step selection
-  const [currentStep, setCurrentStep] = useState<'business' | 'adaccount' | 'page'>('business');
+  const restoreToPageDone = React.useRef(false);
+
+  useVisibilityReset(() => {
+    setLoadingAdAccounts(false);
+    setLoadingPages(false);
+    setIsProcessing(false);
+    setIsRefreshing(false);
+  });
+
+  // Updated state for multi-step selection (sync from URL when initialStep changes)
+  const [currentStep, setCurrentStep] = useState<'business' | 'adaccount' | 'page'>(initialStep ?? 'business');
+  useEffect(() => {
+    if (initialStep) setCurrentStep(initialStep);
+  }, [initialStep]);
   const [adAccounts, setAdAccounts] = useState<AdAccount[]>([]);
-  const [selectedAdAccount, setSelectedAdAccount] = useState<string>('');
+  const [selectedAdAccount, setSelectedAdAccount] = useState<string>(initialAdAccountId ?? '');
   const [loadingAdAccounts, setLoadingAdAccounts] = useState(false);
   
   // New state for Facebook page selection
   const [facebookPages, setFacebookPages] = useState<FacebookPage[]>([]);
   const [selectedPage, setSelectedPage] = useState<string>('');
   const [loadingPages, setLoadingPages] = useState(false);
+  const [hasAttemptedPageLoad, setHasAttemptedPageLoad] = useState(false);
+  const [pageSearchQuery, setPageSearchQuery] = useState('');
+  const [pagePage, setPagePage] = useState(1);
+
+  const PAGE_SIZE = 6;
+  const filteredPages = pageSearchQuery.trim()
+    ? facebookPages.filter(
+        (p) =>
+          p.name?.toLowerCase().includes(pageSearchQuery.toLowerCase()) ||
+          p.category?.toLowerCase().includes(pageSearchQuery.toLowerCase()) ||
+          (p.about && p.about.toLowerCase().includes(pageSearchQuery.toLowerCase()))
+      )
+    : facebookPages;
+  const totalPages = Math.max(1, Math.ceil(filteredPages.length / PAGE_SIZE));
+  const currentPage = Math.min(pagePage, totalPages);
+  const paginatedPages = filteredPages.slice(
+    (currentPage - 1) * PAGE_SIZE,
+    currentPage * PAGE_SIZE
+  );
+
+  useEffect(() => {
+    setPagePage(1);
+  }, [pageSearchQuery]);
+
+  useEffect(() => {
+    if (currentStep === 'page') {
+      setPageSearchQuery('');
+      setPagePage(1);
+    }
+  }, [currentStep]);
 
   // Load business accounts when component mounts
   useEffect(() => {
     if (facebookAccessToken && currentUser && businessAccounts.length === 0) {
       fetchAndSaveBusinessAccounts();
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchAndSaveBusinessAccounts is stable, businessAccounts.length intentionally excluded to avoid re-fetch loops
   }, [facebookAccessToken, currentUser]);
 
   const fetchAndSaveBusinessAccounts = async () => {
     if (!facebookAccessToken || !currentUser) return;
-  
+
     try {
-      
-      // Report progress - Step 1
       onFetchingProgress?.(10, 'Validating Facebook token...');
-      
-      // Test token validity first
-      const meResponse = await fetch(`https://graph.facebook.com/v18.0/me?access_token=${facebookAccessToken}`);
+
+      const meResponse = await fetchWithTimeout(
+        `https://graph.facebook.com/v18.0/me?access_token=${facebookAccessToken}`,
+        { timeoutMs: 20000 }
+      );
       const meData = await meResponse.json();
-  
+
       if (meData.error) {
         throw new Error(`Facebook token invalid: ${meData.error.message}`);
       }
-  
-      // Report progress - Step 2
-     onFetchingProgress?.(25, 'Fetching business accounts...');
-  
-      // Fetch businesses
-      const businessResponse = await fetch(
+
+      onFetchingProgress?.(40, 'Fetching business accounts...');
+
+      const businessResponse = await fetchWithTimeout(
         `https://graph.facebook.com/v18.0/me/businesses?` +
-        `access_token=${facebookAccessToken}&` +
-        `fields=id,name,primary_page,owned_ad_accounts{account_id,name,account_status,currency,timezone_name}`
+          `access_token=${facebookAccessToken}&` +
+          `fields=id,name,primary_page`,
+        { timeoutMs: 20000 }
       );
-  
+
       const businessData = await businessResponse.json();
-  
+
       if (businessData.error) {
         throw new Error(`Facebook API error: ${businessData.error.message}`);
       }
-  
-      // Report progress - Step 3
-      onFetchingProgress?.(40, 'Processing business data...');
-  
-      const businesses: BusinessAccount[] = [];
-  
-      if (businessData.data && businessData.data.length > 0) {
-        for (const business of businessData.data) {
-          // Save business account to database
-          const { error: businessError } = await supabase
-            .from('facebook_business_accounts')
-            .upsert({
+
+      onFetchingProgress?.(70, 'Processing...');
+
+      const businesses: BusinessAccount[] =
+        businessData.data && businessData.data.length > 0
+          ? businessData.data.map((business: { id: string; name: string; primary_page?: { id: string } }) => ({
               id: business.id,
-              user_id: currentUser.id,
               name: business.name,
               business_role: 'Admin',
               status: 'active',
-              primary_page_id: business.primary_page?.id,
-            });
-  
-          if (businessError) {
-            continue;
-          }
-  
-          // Save owned ad accounts
-          let adAccountCount = 0;
-          if (business.owned_ad_accounts?.data) {
-            for (const adAccount of business.owned_ad_accounts.data) {
-              const { error: adAccountError } = await supabase
-                .from('facebook_ad_accounts')
-                .upsert({
-                  id: adAccount.account_id,
-                  business_account_id: business.id,
-                  user_id: currentUser.id,
-                  name: adAccount.name,
-                  account_status: adAccount.account_status,
-                  currency: adAccount.currency,
-                  timezone_name: adAccount.timezone_name,
-                  account_role: 'ADMIN',
-                });
-  
-              if (!adAccountError) {
-                adAccountCount++;
-              }
-            }
-          }
-  
-          businesses.push({
-            id: business.id,
-            name: business.name,
-            business_role: 'Admin',
-            status: 'active',
-            adAccountsCount: adAccountCount
-          });
-        }
-      }
-  
-      // Report progress - Step 4
-      onFetchingProgress?.(60, 'Fetching additional ad accounts...');
-  
-      // Fetch additional ad accounts user has access to
-      const adAccountsResponse = await fetch(
-        `https://graph.facebook.com/v18.0/me/adaccounts?` +
-        `access_token=${facebookAccessToken}&` +
-        `fields=account_id,name,account_status,business,currency,timezone_name`
-      );
-  
-      const adAccountsData = await adAccountsResponse.json();
-  
-      if (!adAccountsData.error && adAccountsData.data) {
-        const adAccountsByBusiness: { [key: string]: any[] } = {};
-        
-        for (const adAccount of adAccountsData.data) {
-          if (adAccount.business) {
-            const businessId = adAccount.business.id;
-            
-            await supabase
-              .from('facebook_ad_accounts')
-              .upsert({
-                id: adAccount.account_id,
-                business_account_id: businessId,
-                user_id: currentUser.id,
-                name: adAccount.name,
-                account_status: adAccount.account_status,
-                currency: adAccount.currency,
-                timezone_name: adAccount.timezone_name,
-                account_role: 'USER',
-              }, {
-                onConflict: 'id'
-              });
-  
-            if (!adAccountsByBusiness[businessId]) {
-              adAccountsByBusiness[businessId] = [];
-            }
-            adAccountsByBusiness[businessId].push(adAccount);
-          }
-        }
-  
-        // Update business accounts with accurate ad account counts
-        businesses.forEach(business => {
-          if (adAccountsByBusiness[business.id]) {
-            business.adAccountsCount = Math.max(
-              business.adAccountsCount,
-              adAccountsByBusiness[business.id].length
-            );
-          }
-        });
-      }
-  
-      // Report progress - Step 5
-      onFetchingProgress?.(80, 'Fetching Facebook pages...');
-  
-      // Fetch and save Facebook Pages
-      await fetchAndSavePages();
-  
-      // Report progress - Complete
+              adAccountsCount: 0,
+            }))
+          : [];
+
       onFetchingProgress?.(100, 'Complete!');
-  
       onBusinessAccountsChange(businesses);
-  
-      // Clear progress after a short delay
+
+      // Sync to Supabase in background so slow/expired session doesn't block business list
+      if (businessData.data && businessData.data.length > 0) {
+        void (async () => {
+          for (const business of businessData.data) {
+            await supabase
+              .from('facebook_business_accounts')
+              .upsert({
+                id: business.id,
+                user_id: currentUser.id,
+                name: business.name,
+                business_role: 'Admin',
+                status: 'active',
+                primary_page_id: business.primary_page?.id,
+              });
+          }
+        })().catch(() => {});
+      }
+
       setTimeout(() => {
         onFetchingProgress?.(0, '');
       }, 1000);
-  
-    } catch (error) {
+    } catch {
       onFetchingProgress?.(0, '');
-      // Error handled by parent component
     }
   };
 
-  const fetchAndSavePages = async () => {
+  // Fetch ad accounts for selected business from Facebook API (on demand)
+  const fetchAdAccountsForBusiness = async (businessId: string) => {
+    setLoadingAdAccounts(true);
     try {
-      const pagesResponse = await fetch(
+      const adAccountsResponse = await fetchWithTimeout(
+        `https://graph.facebook.com/v18.0/me/adaccounts?` +
+          `access_token=${facebookAccessToken}&` +
+          `fields=account_id,name,account_status,business,currency,timezone_name`,
+        { timeoutMs: 20000 }
+      );
+
+      const adAccountsData = await adAccountsResponse.json();
+
+      if (adAccountsData.error) {
+        throw new Error(adAccountsData.error.message || 'Failed to load ad accounts');
+      }
+
+      const allAccounts = adAccountsData.data || [];
+      const forBusiness = allAccounts.filter(
+        (acc: { business?: { id: string } }) => acc.business?.id === businessId
+      );
+
+      const mapped: AdAccount[] = forBusiness.map((acc: {
+        account_id: string;
+        name: string;
+        account_status: string;
+        currency: string;
+        timezone_name: string;
+        business?: { id: string };
+      }) => ({
+        id: acc.account_id,
+        name: acc.name,
+        account_status: acc.account_status,
+        currency: acc.currency,
+        timezone_name: acc.timezone_name,
+        account_role: 'USER',
+      }));
+
+      setAdAccounts(mapped);
+
+      // Sync to Supabase in background so slow/expired session doesn't block UI or navigation
+      void (async () => {
+        for (const adAccount of forBusiness) {
+          await supabase
+            .from('facebook_ad_accounts')
+            .upsert({
+              id: adAccount.account_id,
+              business_account_id: businessId,
+              user_id: currentUser.id,
+              name: adAccount.name,
+              account_status: adAccount.account_status,
+              currency: adAccount.currency,
+              timezone_name: adAccount.timezone_name,
+              account_role: adAccount.business?.id === businessId ? 'ADMIN' : 'USER',
+            }, { onConflict: 'id' });
+        }
+      })().catch(() => {});
+    } catch {
+      setAdAccounts([]);
+    } finally {
+      setLoadingAdAccounts(false);
+    }
+  };
+
+  // Fetch personal ad accounts (not linked to any business) from Facebook API
+  const fetchPersonalAdAccounts = async () => {
+    setLoadingAdAccounts(true);
+    try {
+      const adAccountsResponse = await fetchWithTimeout(
+        `https://graph.facebook.com/v18.0/me/adaccounts?` +
+          `access_token=${facebookAccessToken}&` +
+          `fields=account_id,name,account_status,business,currency,timezone_name`,
+        { timeoutMs: 20000 }
+      );
+
+      const adAccountsData = await adAccountsResponse.json();
+
+      if (adAccountsData.error) {
+        throw new Error(adAccountsData.error.message || 'Failed to load ad accounts');
+      }
+
+      const allAccounts = adAccountsData.data || [];
+      const personalAccounts = allAccounts.filter(
+        (acc: { business?: { id: string } }) => !acc.business?.id
+      );
+
+      const mapped: AdAccount[] = personalAccounts.map((acc: {
+        account_id: string;
+        name: string;
+        account_status: string;
+        currency: string;
+        timezone_name: string;
+      }) => ({
+        id: acc.account_id,
+        name: acc.name,
+        account_status: acc.account_status,
+        currency: acc.currency,
+        timezone_name: acc.timezone_name,
+        account_role: 'USER',
+      }));
+
+      setAdAccounts(mapped);
+    } catch {
+      setAdAccounts([]);
+    } finally {
+      setLoadingAdAccounts(false);
+    }
+  };
+
+  // Fetch Facebook pages from API when user reaches page step (on demand)
+  const fetchFacebookPages = async () => {
+    setLoadingPages(true);
+    try {
+      const pagesResponse = await fetchWithTimeout(
         `https://graph.facebook.com/v18.0/me/accounts?` +
-        `access_token=${facebookAccessToken}&` +
-        `fields=id,name,category,access_token,picture,cover,is_published,verification_status,fan_count,website,about`
+          `access_token=${facebookAccessToken}&` +
+          `fields=id,name,category,access_token,picture,cover,is_published,verification_status,fan_count,website,about`,
+        { timeoutMs: 20000 }
       );
 
       const pagesData = await pagesResponse.json();
 
       if (pagesData.error) {
-        return;
+        throw new Error(pagesData.error.message || 'Failed to load Facebook pages');
       }
 
-      if (pagesData.data) {
-        for (const page of pagesData.data) {
+      const rawPages = pagesData.data || [];
+
+      const mapped: FacebookPage[] = rawPages.map((p: {
+        id: string;
+        name: string;
+        category: string;
+        picture?: { data?: { url?: string } };
+        cover?: { source?: string };
+        is_published?: boolean;
+        verification_status?: string;
+        fan_count?: number;
+        website?: string;
+        about?: string;
+      }) => ({
+        id: p.id,
+        name: p.name,
+        category: p.category ?? '',
+        page_role: 'ADMIN',
+        picture_url: p.picture?.data?.url ?? '',
+        cover_url: p.cover?.source ?? '',
+        is_published: p.is_published !== false,
+        verification_status: p.verification_status ?? '',
+        followers_count: p.fan_count ?? 0,
+        website: p.website ?? '',
+        about: p.about ?? '',
+      }));
+
+      setFacebookPages(mapped);
+
+      // Sync to Supabase in background so slow/expired session doesn't block UI or navigation
+      void (async () => {
+        for (const page of rawPages) {
           await supabase
             .from('facebook_pages')
             .upsert({
@@ -295,64 +417,47 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
               verification_status: page.verification_status,
               followers_count: page.fan_count,
               website: page.website,
-              about: page.about
-            });
+              about: page.about,
+            }, { onConflict: 'id' });
         }
-      }
-    } catch (error) {
-    }
-  };
-
-  // Function to fetch ad accounts for selected business
-  const fetchAdAccountsForBusiness = async (businessId: string) => {
-    setLoadingAdAccounts(true);
-    try {
-      const { data: adAccountsData, error } = await supabase
-        .from('facebook_ad_accounts')
-        .select('id, name, account_status, currency, timezone_name, account_role')
-        .eq('business_account_id', businessId)
-        .eq('user_id', currentUser.id);
-
-      if (error) {
-        throw new Error('Failed to load ad accounts: ' + error.message);
-      }
-
-      setAdAccounts(adAccountsData || []);
-    } catch (error) {
-      setAdAccounts([]);
-    } finally {
-      setLoadingAdAccounts(false);
-    }
-  };
-
-  // New function to fetch Facebook pages
-  const fetchFacebookPages = async () => {
-    setLoadingPages(true);
-    try {
-      const { data: pagesData, error } = await supabase
-        .from('facebook_pages')
-        .select('id, name, category, page_role, picture_url, cover_url, is_published, verification_status, followers_count, website, about')
-        .eq('user_id', currentUser.id);
-
-      if (error) {
-        throw new Error('Failed to load Facebook pages: ' + error.message);
-      }
-
-      setFacebookPages(pagesData || []);
-    } catch (error) {
+      })().catch(() => {});
+    } catch {
       setFacebookPages([]);
     } finally {
       setLoadingPages(false);
+      setHasAttemptedPageLoad(true);
     }
   };
+
+  // When returning from Tools ("Back to page"), load ad accounts and pages for the pre-selected business/ad account
+  useEffect(() => {
+    if (
+      initialStep !== 'page' ||
+      !initialAdAccountId ||
+      !selectedBusiness ||
+      restoreToPageDone.current
+    ) return;
+    restoreToPageDone.current = true;
+    (async () => {
+      if (selectedBusiness === PERSONAL_BUSINESS_ID) {
+        await fetchPersonalAdAccounts();
+      } else {
+        await fetchAdAccountsForBusiness(selectedBusiness);
+      }
+      await fetchFacebookPages();
+    })();
+  }, [initialStep, initialAdAccountId, selectedBusiness]);
 
   const handleRefreshData = async () => {
     setIsRefreshing(true);
     onClearError();
     try {
-      await fetchAndSaveBusinessAccounts();
-    } catch (error) {
-      // Error handled by parent component
+      await promiseWithTimeout(
+        (async () => { await fetchAndSaveBusinessAccounts(); })(),
+        30000
+      );
+    } catch {
+      // Error or timeout - handled by parent / visibility reset
     } finally {
       setIsRefreshing(false);
     }
@@ -362,50 +467,67 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
     onBusinessSelectionChange(businessId);
   };
 
-  // Updated continue handler for three-step flow
+  // Updated continue handler for three-step flow (navigate when callbacks provided for URL-driven flow)
   const handleContinue = async () => {
     if (currentStep === 'business' && selectedBusiness) {
-      // Move to ad account selection
-      await fetchAdAccountsForBusiness(selectedBusiness);
-      setCurrentStep('adaccount');
+      try {
+        if (selectedBusiness === PERSONAL_BUSINESS_ID) {
+          await fetchPersonalAdAccounts();
+        } else {
+          await fetchAdAccountsForBusiness(selectedBusiness);
+        }
+        if (onAdvanceToAdAccount) onAdvanceToAdAccount();
+        else setCurrentStep('adaccount');
+      } finally {
+        setLoadingAdAccounts(false);
+      }
     } else if (currentStep === 'adaccount' && selectedAdAccount) {
-      // Move to page selection
-      await fetchFacebookPages();
-      setCurrentStep('page');
+      try {
+        await fetchFacebookPages();
+        if (onAdvanceToPage) onAdvanceToPage();
+        else setCurrentStep('page');
+      } finally {
+        setLoadingPages(false);
+      }
     } else if (currentStep === 'page' && selectedPage) {
-      // Continue with all selections
       setIsProcessing(true);
       try {
-
-        // If selectedPage is an object, extract just the ID
         const pageIdToSend = typeof selectedPage === 'object' && selectedPage?.id 
           ? selectedPage.id 
           : selectedPage;
 
-        // Get server access token
         const selectedServerData = servers.find(s => s.id === selectedServer);
         if (!selectedServerData) {
           throw new Error('Server not found');
         }
 
-        // Call with all required parameters
-        await onBusinessSelected(
-          selectedServer,                           // serverId
-          selectedBusiness,                         // businessId
-          selectedAdAccount,                        // adAccountId
-          pageIdToSend,                            // pageId
-          selectedServerData.access_token          // serverAccessToken
+        await promiseWithTimeout(
+          Promise.resolve(
+            onBusinessSelected(
+              selectedServer,
+              selectedBusiness,
+              selectedAdAccount,
+              pageIdToSend,
+              selectedServerData.access_token,
+              currentUser.id
+            )
+          ),
+          30000
         );
-      } catch (error) {
-        // Error handled by parent component
+      } catch {
+        // Error or timeout - handled by parent / visibility reset
       } finally {
         setIsProcessing(false);
       }
     }
   };
 
-  // Updated back button handlers
+  // Updated back button handlers (use navigate callbacks when provided for URL-driven flow)
   const handleBackToBusiness = () => {
+    if (onBackToBusiness) {
+      onBackToBusiness();
+      return;
+    }
     setCurrentStep('business');
     setSelectedAdAccount('');
     setAdAccounts([]);
@@ -414,6 +536,10 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
   };
 
   const handleBackToAdAccounts = () => {
+    if (onBackToAdAccounts) {
+      onBackToAdAccounts();
+      return;
+    }
     setCurrentStep('adaccount');
     setSelectedPage('');
     setFacebookPages([]);
@@ -444,6 +570,16 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
 
   const stepInfo = getStepInfo();
 
+  // Business list shown in step 1: Personal first, then API businesses
+  const displayBusinesses = [PERSONAL_BUSINESS_OPTION, ...businessAccounts];
+
+  // Map API account_status (1/201 = active, string 'ACTIVE', else inactive) to display label
+  const getAdAccountStatusLabel = (status: string | number): 'Active' | 'Inactive' => {
+    const s = status;
+    if (s === 1 || s === 201 || s === '1' || s === '201' || s === 'ACTIVE') return 'Active';
+    return 'Inactive';
+  };
+
   const getContinueButtonState = () => {
     if (currentStep === 'business') {
       return {
@@ -466,205 +602,159 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
   
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 p-4">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 p-4">
       <div className="max-w-4xl mx-auto pt-8">
-        {/* Header */}
-        <div className="text-center mb-8">
-          {currentUser && (
-            <div className="flex items-center justify-center space-x-3 mb-4">
-              {currentUser.user_metadata?.avatar_url && (
-                <img 
-                  src={currentUser.user_metadata.avatar_url} 
-                  alt={currentUser.user_metadata?.full_name}
-                  className="w-12 h-12 rounded-full"
-                />
-              )}
-              <div>
-                <p className="text-lg font-semibold text-gray-900">
-                  Welcome, {currentUser.user_metadata?.full_name || currentUser.email}!
-                </p>
-                <p className="text-sm text-gray-600">{currentUser.email}</p>
-              </div>
-            </div>
-          )}
-
-          {/* Selected Server Info */}
-          {selectedServer && (
-            <div className="bg-blue-50 rounded-lg p-4 mb-6 max-w-2xl mx-auto">
-              <div className="flex items-center justify-center space-x-2">
-                <Server className="w-5 h-5 text-blue-600" />
-                <span className="text-blue-900 font-medium">
-                  Server: {servers.find(s => s.id === selectedServer)?.name}
-                </span>
-              </div>
-            </div>
-          )}
-
-          {/* Step Progress Indicator */}
-          <div className="flex items-center justify-center space-x-4 mb-6">
-            <div className={`flex items-center space-x-2 ${currentStep === 'business' ? 'text-blue-600' : currentStep === 'adaccount' || currentStep === 'page' ? 'text-green-600' : 'text-gray-400'}`}>
-              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold ${currentStep === 'business' ? 'bg-blue-100' : currentStep === 'adaccount' || currentStep === 'page' ? 'bg-green-100' : 'bg-gray-100'}`}>
+        {/* Header: section, title, description */}
+        <div className="mb-8">
+          {/* Step Progress Indicator: 1 Server → 2 Business → 3 Ad Account → 4 Page → 5 Tools */}
+          <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-3 mb-6 text-center">
+            {/* 1. Server (completed - already selected to be here) */}
+            <div className="flex items-center space-x-1.5 text-green-600 dark:text-green-400">
+              <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center text-xs sm:text-sm font-semibold bg-green-100 dark:bg-green-900/40">
                 1
               </div>
-              <span className="text-sm font-medium">Business</span>
+              <span className="text-xs sm:text-sm font-medium whitespace-nowrap">Server</span>
             </div>
-            
-            <ArrowRight className={`w-4 h-4 ${currentStep === 'adaccount' || currentStep === 'page' ? 'text-green-600' : 'text-gray-400'}`} />
-            
-            <div className={`flex items-center space-x-2 ${currentStep === 'adaccount' ? 'text-blue-600' : currentStep === 'page' ? 'text-green-600' : 'text-gray-400'}`}>
-              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold ${currentStep === 'adaccount' ? 'bg-blue-100' : currentStep === 'page' ? 'bg-green-100' : 'bg-gray-100'}`}>
+            <ArrowRight className="w-3 h-3 sm:w-4 sm:h-4 text-green-500 dark:text-green-600 flex-shrink-0" />
+            {/* 2. Business */}
+            <div className={`flex items-center space-x-1.5 ${currentStep === 'business' ? 'text-blue-600 dark:text-blue-400' : 'text-green-600 dark:text-green-400'}`}>
+              <div className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center text-xs sm:text-sm font-semibold ${currentStep === 'business' ? 'bg-blue-100 dark:bg-blue-900/40' : 'bg-green-100 dark:bg-green-900/40'}`}>
                 2
               </div>
-              <span className="text-sm font-medium">Ad Account</span>
+              <span className="text-xs sm:text-sm font-medium whitespace-nowrap">Business</span>
             </div>
-            
-            <ArrowRight className={`w-4 h-4 ${currentStep === 'page' ? 'text-green-600' : 'text-gray-400'}`} />
-            
-            <div className={`flex items-center space-x-2 ${currentStep === 'page' ? 'text-blue-600' : 'text-gray-400'}`}>
-              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold ${currentStep === 'page' ? 'bg-blue-100' : 'bg-gray-100'}`}>
+            <ArrowRight className={`w-3 h-3 sm:w-4 sm:h-4 flex-shrink-0 ${currentStep === 'adaccount' || currentStep === 'page' ? 'text-green-500 dark:text-green-600' : 'text-gray-300 dark:text-gray-600'}`} />
+            {/* 3. Ad Account */}
+            <div className={`flex items-center space-x-1.5 ${currentStep === 'adaccount' ? 'text-blue-600 dark:text-blue-400' : currentStep === 'page' ? 'text-green-600 dark:text-green-400' : 'text-gray-400 dark:text-gray-500'}`}>
+              <div className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center text-xs sm:text-sm font-semibold ${currentStep === 'adaccount' ? 'bg-blue-100 dark:bg-blue-900/40' : currentStep === 'page' ? 'bg-green-100 dark:bg-green-900/40' : 'bg-gray-100 dark:bg-gray-700'}`}>
                 3
               </div>
-              <span className="text-sm font-medium">Page</span>
+              <span className="text-xs sm:text-sm font-medium whitespace-nowrap">Ad Account</span>
+            </div>
+            <ArrowRight className={`w-3 h-3 sm:w-4 sm:h-4 flex-shrink-0 ${currentStep === 'page' ? 'text-green-500 dark:text-green-600' : 'text-gray-300 dark:text-gray-600'}`} />
+            {/* 4. Page */}
+            <div className={`flex items-center space-x-1.5 ${currentStep === 'page' ? 'text-blue-600 dark:text-blue-400' : 'text-gray-400 dark:text-gray-500'}`}>
+              <div className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center text-xs sm:text-sm font-semibold ${currentStep === 'page' ? 'bg-blue-100 dark:bg-blue-900/40' : 'bg-gray-100 dark:bg-gray-700'}`}>
+                4
+              </div>
+              <span className="text-xs sm:text-sm font-medium whitespace-nowrap">Page</span>
+            </div>
+            <ArrowRight className="w-3 h-3 sm:w-4 sm:h-4 text-gray-300 dark:text-gray-600 flex-shrink-0" />
+            {/* 5. Tools (upcoming) */}
+            <div className="flex items-center space-x-1.5 text-gray-400 dark:text-gray-500">
+              <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center text-xs sm:text-sm font-semibold bg-gray-100 dark:bg-gray-700">
+                5
+              </div>
+              <span className="text-xs sm:text-sm font-medium whitespace-nowrap">Tools</span>
             </div>
           </div>
 
-          {/* Dynamic header */}
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">{stepInfo.title}</h1>
-          <p className="text-gray-600">{stepInfo.description}</p>
+          {/* Title, description */}
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100 mb-2 text-center">{stepInfo.title}</h1>
+          <p className="text-gray-600 dark:text-gray-300 text-center">{stepInfo.description}</p>
 
-          {/* Selection Context Info */}
-          {currentStep !== 'business' && (
-            <div className="bg-blue-50 rounded-lg p-3 mt-4 max-w-md mx-auto">
-              {selectedBusiness && (
-                <p className="text-blue-900 text-sm">
-                  <strong>Business:</strong> {businessAccounts.find(b => b.id === selectedBusiness)?.name}
-                </p>
-              )}
-              {currentStep === 'page' && selectedAdAccount && (
-                <p className="text-blue-900 text-sm">
-                  <strong>Ad Account:</strong> {adAccounts.find(a => a.id === selectedAdAccount)?.name}
-                </p>
-              )}
-            </div>
-          )}
-          
-          {/* Navigation buttons */}
-          <div className="flex items-center justify-center space-x-4 mt-4">
-            {currentStep === 'business' ? (
-              <>
-                <button
-                  onClick={handleRefreshData}
-                  disabled={isRefreshing}
-                  className="inline-flex items-center space-x-2 text-blue-600 hover:text-blue-700 text-sm"
-                >
-                  <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-                  <span>Refresh Data</span>
-                </button>
-                
-                <button
-                  onClick={onBackToServers}
-                  className="inline-flex items-center space-x-2 text-gray-600 hover:text-gray-700 text-sm"
-                >
-                  <ArrowRight className="w-4 h-4 rotate-180" />
-                  <span>Back to Servers</span>
-                </button>
-              </>
-            ) : currentStep === 'adaccount' ? (
-              <button
-                onClick={handleBackToBusiness}
-                className="inline-flex items-center space-x-2 text-gray-600 hover:text-gray-700 text-sm"
-              >
-                <ArrowRight className="w-4 h-4 rotate-180" />
-                <span>Back to Business Selection</span>
-              </button>
-            ) : (
-              <button
-                onClick={handleBackToAdAccounts}
-                className="inline-flex items-center space-x-2 text-gray-600 hover:text-gray-700 text-sm"
-              >
-                <ArrowRight className="w-4 h-4 rotate-180" />
-                <span>Back to Ad Account Selection</span>
-              </button>
-            )}
+          {/* Back button - uses URL navigation when onBackToBusiness/onBackToAdAccounts provided */}
+          <div className="flex flex-wrap items-center justify-center mt-4">
+            <button
+              onClick={
+                currentStep === 'business'
+                  ? onBackToServers
+                  : currentStep === 'adaccount'
+                    ? handleBackToBusiness
+                    : handleBackToAdAccounts
+              }
+              className="inline-flex items-center gap-2 rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+            >
+              <ArrowRight className="w-4 h-4 rotate-180" />
+              <span>
+                {currentStep === 'business'
+                  ? 'Back to Servers'
+                  : currentStep === 'adaccount'
+                    ? 'Back to Business Selection'
+                    : 'Back to Ad Account Selection'}
+              </span>
+            </button>
           </div>
         </div>
 
         {/* Error Display */}
         {error && (
-          <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start space-x-3 max-w-2xl mx-auto">
-            <AlertCircle className="w-5 h-5 text-red-500 mt-0.5 flex-shrink-0" />
+          <div className="mb-6 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg flex items-start space-x-3 max-w-2xl mx-auto">
+            <AlertCircle className="w-5 h-5 text-red-500 dark:text-red-400 mt-0.5 flex-shrink-0" />
             <div>
-              <p className="text-red-800 text-sm">{error}</p>
+              <p className="text-red-800 dark:text-red-300 text-sm">{error}</p>
             </div>
           </div>
         )}
 
         {/* Content based on current step */}
-        {businessAccounts.length === 0 && currentStep === 'business' ? (
+        {currentStep === 'business' && displayBusinesses.length === 0 ? (
           <div className="text-center py-12">
-            <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
-              <Building2 className="w-8 h-8 text-gray-400" />
+            <div className="w-16 h-16 bg-gray-100 dark:bg-gray-700 rounded-full flex items-center justify-center mx-auto mb-4">
+              <Building2 className="w-8 h-8 text-gray-400 dark:text-gray-500" />
             </div>
-            <h3 className="text-lg font-medium text-gray-900 mb-2">No Business Accounts Found</h3>
-            <p className="text-gray-600 mb-4">
-              You don't have access to any Facebook Business Manager accounts.
+            <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">Loading businesses...</h3>
+            <p className="text-gray-600 dark:text-gray-400 mb-4">
+              Fetching your business and personal ad accounts.
             </p>
-            <button
-              onClick={handleRefreshData}
-              disabled={isRefreshing}
-              className="inline-flex items-center space-x-2 text-blue-600 hover:underline"
-            >
-              <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-              <span>Try refreshing</span>
-            </button>
           </div>
         ) : (
           <>
-            {/* Business Cards Grid - Only show on business step */}
+            {/* Business Cards Grid - Only show on business step (Personal first, then API businesses) */}
             {currentStep === 'business' && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-                {businessAccounts.map((business) => (
-                  <div
-                    key={business.id}
-                    onClick={() => handleBusinessCardClick(business.id)}
-                    className={`bg-white rounded-xl p-6 border-2 cursor-pointer transition-all duration-200 hover:shadow-lg ${
-                      selectedBusiness === business.id
-                        ? 'border-blue-500 shadow-lg'
-                        : 'border-gray-200 hover:border-gray-300'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between mb-4">
-                      <div className="flex items-center space-x-3">
-                        <div className="w-12 h-12 bg-gradient-to-br from-blue-100 to-purple-100 rounded-lg flex items-center justify-center">
-                          <Building2 className="w-6 h-6 text-blue-600" />
+                {displayBusinesses.map((business) => {
+                  const isPersonal = business.id === PERSONAL_BUSINESS_ID;
+                  return (
+                    <div
+                      key={business.id}
+                      onClick={() => handleBusinessCardClick(business.id)}
+                      className={`bg-white dark:bg-gray-800 rounded-xl p-6 border-2 cursor-pointer transition-all duration-200 hover:shadow-lg ${
+                        selectedBusiness === business.id
+                          ? 'border-blue-500 dark:border-blue-400 shadow-lg'
+                          : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between mb-4">
+                        <div className="flex items-center space-x-3">
+                          <div className={`w-12 h-12 rounded-lg flex items-center justify-center ${
+                            isPersonal
+                              ? 'bg-gradient-to-br from-amber-100 to-orange-100 dark:from-amber-900/30 dark:to-orange-900/30'
+                              : 'bg-gradient-to-br from-blue-100 to-purple-100 dark:from-blue-900/30 dark:to-purple-900/30'
+                          }`}>
+                            {isPersonal ? (
+                              <User className="w-6 h-6 text-amber-600 dark:text-amber-400" />
+                            ) : (
+                              <Building2 className="w-6 h-6 text-blue-600 dark:text-blue-400" />
+                            )}
+                          </div>
+                          <div>
+                            <h3 className="font-semibold text-gray-900 dark:text-gray-100">{business.name}</h3>
+                            <p className="text-sm text-gray-500 dark:text-gray-400">{business.business_role}</p>
+                          </div>
                         </div>
-                        <div>
-                          <h3 className="font-semibold text-gray-900">{business.name}</h3>
-                          <p className="text-sm text-gray-500">{business.business_role}</p>
-                        </div>
+                        {selectedBusiness === business.id && (
+                          <CheckCircle className="w-6 h-6 text-blue-500 dark:text-blue-400" />
+                        )}
                       </div>
-                      {selectedBusiness === business.id && (
-                        <CheckCircle className="w-6 h-6 text-blue-500" />
-                      )}
-                    </div>
 
-                    <div className="flex items-center justify-between text-sm">
-                      <div className="flex items-center space-x-4">
-                        <div className="flex items-center space-x-1">
-                          <Users className="w-4 h-4 text-gray-400" />
-                          <span className="text-gray-600">{business.adAccountsCount} Ad Accounts</span>
-                        </div>
+                      <div className="flex items-center justify-between text-sm">
+                        {isPersonal ? (
+                          <span className="text-gray-500 dark:text-gray-400 text-xs">Ad accounts not linked to a business</span>
+                        ) : (
+                          <span className="text-gray-600 dark:text-gray-400 font-mono text-xs" title={business.id}>Business ID: {business.id}</span>
+                        )}
+                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                          business.status === 'active'
+                            ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400'
+                            : 'bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-400'
+                        }`}>
+                          {business.status === 'active' ? 'Active' : 'Pending'}
+                        </span>
                       </div>
-                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                        business.status === 'active'
-                          ? 'bg-green-100 text-green-700'
-                          : 'bg-yellow-100 text-yellow-700'
-                      }`}>
-                        {business.status === 'active' ? 'Active' : 'Pending'}
-                      </span>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
 
@@ -673,16 +763,16 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
               <>
                 {loadingAdAccounts ? (
                   <div className="text-center py-12">
-                    <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-                    <p className="text-gray-600">Loading ad accounts...</p>
+                    <Spinner size="lg" className="mx-auto mb-4" />
+                    <p className="text-gray-600 dark:text-gray-400">Loading ad accounts...</p>
                   </div>
                 ) : adAccounts.length === 0 ? (
                   <div className="text-center py-12">
-                    <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                      <AlertCircle className="w-8 h-8 text-gray-400" />
+                    <div className="w-16 h-16 bg-gray-100 dark:bg-gray-700 rounded-full flex items-center justify-center mx-auto mb-4">
+                      <AlertCircle className="w-8 h-8 text-gray-400 dark:text-gray-500" />
                     </div>
-                    <h3 className="text-lg font-medium text-gray-900 mb-2">No Ad Accounts Found</h3>
-                    <p className="text-gray-600 mb-4">
+                    <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">No Ad Accounts Found</h3>
+                    <p className="text-gray-600 dark:text-gray-400 mb-4">
                       This business doesn't have any ad accounts associated with it.
                     </p>
                   </div>
@@ -692,38 +782,37 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
                       <div
                         key={adAccount.id}
                         onClick={() => setSelectedAdAccount(adAccount.id)}
-                        className={`bg-white rounded-xl p-6 border-2 cursor-pointer transition-all duration-200 hover:shadow-lg ${
+                        className={`bg-white dark:bg-gray-800 rounded-xl p-6 border-2 cursor-pointer transition-all duration-200 hover:shadow-lg ${
                           selectedAdAccount === adAccount.id
-                            ? 'border-blue-500 shadow-lg'
-                            : 'border-gray-200 hover:border-gray-300'
+                            ? 'border-blue-500 dark:border-blue-400 shadow-lg'
+                            : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
                         }`}
                       >
                         <div className="flex items-start justify-between mb-4">
                           <div className="flex items-center space-x-3">
-                            <div className="w-12 h-12 bg-gradient-to-br from-green-100 to-blue-100 rounded-lg flex items-center justify-center">
-                              <Users className="w-6 h-6 text-green-600" />
+                            <div className="w-12 h-12 bg-gradient-to-br from-green-100 to-blue-100 dark:from-green-900/30 dark:to-blue-900/30 rounded-lg flex items-center justify-center">
+                              <Users className="w-6 h-6 text-green-600 dark:text-green-400" />
                             </div>
                             <div>
-                              <h3 className="font-semibold text-gray-900">{adAccount.name}</h3>
-                              <p className="text-sm text-gray-500">Account ID: {adAccount.id}</p>
+                              <h3 className="font-semibold text-gray-900 dark:text-gray-100">{adAccount.name}</h3>
+                              <p className="text-sm text-gray-500 dark:text-gray-400">{adAccount.currency}</p>
                             </div>
                           </div>
                           {selectedAdAccount === adAccount.id && (
-                            <CheckCircle className="w-6 h-6 text-blue-500" />
+                            <CheckCircle className="w-6 h-6 text-blue-500 dark:text-blue-400" />
                           )}
                         </div>
 
                         <div className="flex items-center justify-between text-sm">
                           <div className="flex items-center space-x-4">
-                            <span className="text-gray-600">{adAccount.currency}</span>
-                            <span className="text-gray-600">{adAccount.account_role}</span>
+                            <span className="text-gray-600 dark:text-gray-400 font-mono text-xs">Account ID: {adAccount.id}</span>
                           </div>
                           <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                            adAccount.account_status === 'ACTIVE'
-                              ? 'bg-green-100 text-green-700'
-                              : 'bg-yellow-100 text-yellow-700'
+                            getAdAccountStatusLabel(adAccount.account_status) === 'Active'
+                              ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400'
+                              : 'bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-400'
                           }`}>
-                            {adAccount.account_status}
+                            {getAdAccountStatusLabel(adAccount.account_status)}
                           </span>
                         </div>
                       </div>
@@ -736,31 +825,69 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
             {/* Facebook Page Selection - Show when step is 'page' */}
             {currentStep === 'page' && (
               <>
-                {loadingPages ? (
+                {(loadingPages || (facebookPages.length === 0 && !hasAttemptedPageLoad)) ? (
                   <div className="text-center py-12">
-                    <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-                    <p className="text-gray-600">Loading Facebook pages...</p>
+                    <Spinner size="sm" className="mx-auto mb-4" />
+                    <p className="text-gray-600 dark:text-gray-400">Loading Facebook pages...</p>
                   </div>
                 ) : facebookPages.length === 0 ? (
                   <div className="text-center py-12">
-                    <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                      <AlertCircle className="w-8 h-8 text-gray-400" />
+                    <div className="w-16 h-16 bg-gray-100 dark:bg-gray-700 rounded-full flex items-center justify-center mx-auto mb-4">
+                      <AlertCircle className="w-8 h-8 text-gray-400 dark:text-gray-500" />
                     </div>
-                    <h3 className="text-lg font-medium text-gray-900 mb-2">No Facebook Pages Found</h3>
-                    <p className="text-gray-600 mb-4">
+                    <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">No Facebook Pages Found</h3>
+                    <p className="text-gray-600 dark:text-gray-400 mb-4">
                       You don't have access to any Facebook pages.
                     </p>
                   </div>
                 ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-                    {facebookPages.map((page) => (
+                  <>
+                    <div className="relative mb-6">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 dark:text-gray-500" />
+                      <input
+                        type="text"
+                        placeholder="Search pages by name or category..."
+                        value={pageSearchQuery}
+                        onChange={(e) => setPageSearchQuery(e.target.value)}
+                        className="w-full pl-10 pr-4 py-2.5 border border-gray-200 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-shadow bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-500 dark:placeholder-gray-400"
+                      />
+                      {pageSearchQuery && (
+                        <button
+                          type="button"
+                          onClick={() => setPageSearchQuery('')}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
+                          aria-label="Clear search"
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
+                    {filteredPages.length === 0 ? (
+                      <div className="text-center py-12">
+                        <Search className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
+                        <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">No pages match your search</h3>
+                        <p className="text-gray-600 dark:text-gray-400 mb-4">
+                          Try a different name or category.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => setPageSearchQuery('')}
+                          className="text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 font-medium"
+                        >
+                          Clear search
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                          {paginatedPages.map((page) => (
                       <div
                         key={page.id}
                         onClick={() => setSelectedPage(page.id)}
-                        className={`bg-white rounded-xl p-6 border-2 cursor-pointer transition-all duration-200 hover:shadow-lg ${
+                        className={`bg-white dark:bg-gray-800 rounded-xl p-6 border-2 cursor-pointer transition-all duration-200 hover:shadow-lg ${
                           selectedPage === page.id
-                            ? 'border-blue-500 shadow-lg'
-                            : 'border-gray-200 hover:border-gray-300'
+                            ? 'border-blue-500 dark:border-blue-400 shadow-lg'
+                            : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
                         }`}
                       >
                         <div className="flex items-start justify-between mb-4">
@@ -772,36 +899,36 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
                                 className="w-12 h-12 rounded-lg object-cover"
                               />
                             ) : (
-                              <div className="w-12 h-12 bg-gradient-to-br from-purple-100 to-pink-100 rounded-lg flex items-center justify-center">
-                                <FileText className="w-6 h-6 text-purple-600" />
+                              <div className="w-12 h-12 bg-gradient-to-br from-purple-100 to-pink-100 dark:from-purple-900/30 dark:to-pink-900/30 rounded-lg flex items-center justify-center">
+                                <FileText className="w-6 h-6 text-purple-600 dark:text-purple-400" />
                               </div>
                             )}
                             <div>
-                              <h3 className="font-semibold text-gray-900">{page.name}</h3>
-                              <p className="text-sm text-gray-500">{page.category}</p>
+                              <h3 className="font-semibold text-gray-900 dark:text-gray-100">{page.name}</h3>
+                              <p className="text-sm text-gray-500 dark:text-gray-400">{page.category}</p>
                               {page.verification_status && (
-                                <p className="text-xs text-blue-600">{page.verification_status}</p>
+                                <p className="text-xs text-blue-600 dark:text-blue-400">{page.verification_status}</p>
                               )}
                             </div>
                           </div>
                           {selectedPage === page.id && (
-                            <CheckCircle className="w-6 h-6 text-blue-500" />
+                            <CheckCircle className="w-6 h-6 text-blue-500 dark:text-blue-400" />
                           )}
                         </div>
 
                         <div className="flex items-center justify-between text-sm">
                           <div className="flex items-center space-x-4">
                             <div className="flex items-center space-x-1">
-                              <Users className="w-4 h-4 text-gray-400" />
-                              <span className="text-gray-600">
+                              <Users className="w-4 h-4 text-gray-400 dark:text-gray-500" />
+                              <span className="text-gray-600 dark:text-gray-400">
                                 {page.followers_count ? `${page.followers_count.toLocaleString()} followers` : 'No followers data'}
                               </span>
                             </div>
                           </div>
                           <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                             page.is_published
-                              ? 'bg-green-100 text-green-700'
-                              : 'bg-yellow-100 text-yellow-700'
+                              ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400'
+                              : 'bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-400'
                           }`}>
                             {page.is_published ? 'Published' : 'Unpublished'}
                           </span>
@@ -809,14 +936,14 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
 
                         {/* Additional page info */}
                         {(page.website || page.about) && (
-                          <div className="mt-3 pt-3 border-t border-gray-100">
+                          <div className="mt-3 pt-3 border-t border-gray-100 dark:border-gray-600">
                             {page.website && (
-                              <p className="text-xs text-gray-600 mb-1">
+                              <p className="text-xs text-gray-600 dark:text-gray-400 mb-1">
                                 <strong>Website:</strong> {page.website}
                               </p>
                             )}
                             {page.about && (
-                              <p className="text-xs text-gray-600 line-clamp-2">
+                              <p className="text-xs text-gray-600 dark:text-gray-400 line-clamp-2">
                                 <strong>About:</strong> {page.about}
                               </p>
                             )}
@@ -824,7 +951,40 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
                         )}
                       </div>
                     ))}
-                  </div>
+                        </div>
+                        {totalPages > 1 && (
+                          <div className="flex flex-wrap items-center justify-between gap-4 border-t border-gray-200 dark:border-gray-600 pt-4">
+                            <button
+                              type="button"
+                              onClick={() => setPagePage((p) => Math.max(1, p - 1))}
+                              disabled={currentPage <= 1}
+                              className="inline-flex items-center gap-1 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              <ChevronLeft className="w-4 h-4" />
+                              Previous
+                            </button>
+                            <span className="text-sm text-gray-600 dark:text-gray-400">
+                              Page {currentPage} of {totalPages}
+                              {filteredPages.length > 0 && (
+                                <span className="text-gray-400 dark:text-gray-500 ml-1">
+                                  ({filteredPages.length} {filteredPages.length === 1 ? 'page' : 'pages'})
+                                </span>
+                              )}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setPagePage((p) => Math.min(totalPages, p + 1))}
+                              disabled={currentPage >= totalPages}
+                              className="inline-flex items-center gap-1 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              Next
+                              <ChevronRight className="w-4 h-4" />
+                            </button>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </>
                 )}
               </>
             )}
@@ -844,7 +1004,7 @@ const BusinessSelectionStep: React.FC<BusinessSelectionStepProps> = ({
                     >
                       {isLoading ? (
                         <>
-                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                          <Spinner size="xs" variant="white" />
                           <span>{label}</span>
                         </>
                       ) : (

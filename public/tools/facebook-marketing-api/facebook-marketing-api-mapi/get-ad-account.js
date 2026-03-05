@@ -3,53 +3,48 @@
  *
  * @param {Object} args - Arguments for the request.
  * @param {string} args.account_id - The ID of the ad account to retrieve.
- * @param {string} args.base_url - The base URL for the Facebook API.
+ * @param {string} [args.base_url] - The base URL for the Facebook API (default uses FACEBOOK_API_VERSION).
  * @returns {Promise<Object>} - The details of the ad account.
  */
-const executeFunction = async ({ account_id, base_url }) => {
-  const token = process.env.FACEBOOK_MARKETING_API_API_KEY;
-  try {
-    // Construct the URL for the request
-    const url = `${base_url}/act_${account_id}`;
+import { getSupabaseClient, getTokenForAccount } from './_token-utils.js';
+import { getBaseUrl, normalizeAccountId, safeFacebookError } from './_shared-helpers.js';
 
-    // Set up headers for the request
+const DEFAULT_FIELDS = 'id,name,account_id,account_status,age,amount_spent,balance,business,business_city,business_country_code,currency,timezone_name,timezone_offset_hours_utc';
+
+const executeFunction = async ({ account_id, fields, base_url }) => {
+  const base = base_url || getBaseUrl();
+  const supabase = getSupabaseClient();
+  const acctId = normalizeAccountId(account_id);
+  const token = await getTokenForAccount(supabase, acctId);
+  if (!token) {
+    return { error: 'No Facebook access token found for this ad account' };
+  }
+  try {
+    const url = new URL(`${base}/act_${acctId}`);
+    url.searchParams.append('fields', fields || DEFAULT_FIELDS);
     const headers = {
       'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json'
     };
-
-    // Perform the fetch request
-    const response = await fetch(url, {
-      method: 'GET',
-      headers
-    });
-
-    // Check if the response was successful
+    const response = await fetch(url.toString(), { method: 'GET', headers });
     if (!response.ok) {
       const errorData = await response.json();
       console.error('Error fetching ad account details:', JSON.stringify(errorData));
-      throw new Error(errorData);
+      throw new Error(safeFacebookError(errorData));
     }
-
-    // Parse and return the response data
-    const data = await response.json();
-    return data;
+    return await response.json();
   } catch (error) {
     console.error('Error fetching ad account details:', error);
-    return { error: 'An error occurred while fetching ad account details.' };
+    return { error: error.message || 'An error occurred while fetching ad account details.' };
   }
 };
 
-/**
- * Tool configuration for getting Ad Account details from the Facebook Marketing API.
- * @type {Object}
- */
 const apiTool = {
   function: executeFunction,
   definition: {
     type: 'function',
     function: {
-      name: 'GetAdAccount',
+      name: 'get_ad_account',
       description: 'Retrieve details of an ad account from the Facebook Marketing API.',
       parameters: {
         type: 'object',
@@ -58,12 +53,16 @@ const apiTool = {
             type: 'string',
             description: 'The ID of the ad account to retrieve.'
           },
+          fields: {
+            type: 'string',
+            description: 'Comma-separated list of fields to retrieve (optional, defaults to comprehensive fields).'
+          },
           base_url: {
             type: 'string',
-            description: 'The base URL for the Facebook API.'
+            description: 'The base URL for the Facebook API (optional).'
           }
         },
-        required: ['account_id', 'base_url']
+        required: ['account_id']
       }
     }
   }

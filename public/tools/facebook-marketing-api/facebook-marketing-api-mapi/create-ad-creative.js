@@ -3,6 +3,8 @@
  * Now supports boosting existing Facebook page posts via object_story_id
  */
 
+import { getBaseUrl, resolveToken, clean } from './_shared-helpers.js';
+
 const executeFunction = async ({
   // Required routing
   account_id,
@@ -29,50 +31,7 @@ const executeFunction = async ({
   // Common options
   cta_type = 'LEARN_MORE'
 }) => {
-  const { createClient } = await import('@supabase/supabase-js');
-
-  const supabase = createClient(
-    process.env.SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY,
-    { auth: { autoRefreshToken: false, persistSession: false } }
-  );
-
-  const API_VERSION = process.env.FACEBOOK_API_VERSION || 'v21.0';
-  const baseUrl = `https://graph.facebook.com/${API_VERSION}`;
-
-  // Helper functions
-  const clean = (obj) => {
-    const o = { ...obj };
-    Object.entries(o).forEach(([k, v]) => {
-      if (v == null || (typeof v === 'string' && v.trim() === '') || (Array.isArray(v) && v.length === 0)) {
-        delete o[k];
-      }
-    });
-    return o;
-  };
-
-  const getUserFromAccount = async (supabaseClient, accountId) => {
-    if (!accountId) throw new Error('Account ID is required');
-    const { data, error } = await supabaseClient
-      .from('facebook_ad_accounts')
-      .select('user_id, id')
-      .eq('id', String(accountId).trim());
-    if (error) throw new Error(`Account lookup failed: ${error.message}`);
-    if (!data?.length) throw new Error(`Ad account ${accountId} not found in database.`);
-    const row = data[0];
-    if (!row.user_id) throw new Error(`Ad account ${accountId} has no associated user_id`);
-    return row.user_id;
-  };
-
-  const getFacebookToken = async (supabaseClient, userId) => {
-    const { data, error } = await supabaseClient
-      .from('users')
-      .select('facebook_long_lived_token')
-      .eq('id', userId)
-      .single();
-    if (error) throw new Error(`Supabase query failed: ${error.message}`);
-    return data?.facebook_long_lived_token || null;
-  };
+  const baseUrl = getBaseUrl();
 
   // Validate existing post
   const validatePost = async ({ token, page_id, post_id }) => {
@@ -183,14 +142,7 @@ const executeFunction = async ({
 
   try {
     // Get token
-    const userId = await getUserFromAccount(supabase, account_id);
-    const token = await getFacebookToken(supabase, userId);
-    if (!token) {
-      return {
-        error: 'No Facebook access token found for the user who owns this ad account',
-        details: `Account ${account_id} belongs to user ${userId} but they have no Facebook token`
-      };
-    }
+    const { token } = await resolveToken(account_id);
 
     let creativeName;
     let creativeParams;
@@ -395,12 +347,12 @@ const INPUT_SCHEMA = {
 const apiTool = {
   function: executeFunction,
   definition: {
-    name: 'create-ad-creative',
+    name: 'create_ad_creative',
     description: 'Create Facebook Ad Creative - either boost existing page posts or create new photo/video posts. Supports both strategies with comprehensive error handling.',
     inputSchema: INPUT_SCHEMA,
     type: 'function',
     function: {
-      name: 'create-ad-creative',
+      name: 'create_ad_creative',
       description: 'Create Facebook Ad Creative - either boost existing page posts or create new photo/video posts. Supports both strategies with comprehensive error handling.',
       parameters: INPUT_SCHEMA
     }

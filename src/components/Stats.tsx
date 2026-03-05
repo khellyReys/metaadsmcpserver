@@ -31,23 +31,23 @@ const Stats = () => {
 
   const getColorClasses = (color: string) => {
     const colors = {
-      green: 'text-green-600 bg-green-50',
-      blue: 'text-blue-600 bg-blue-50',
-      yellow: 'text-yellow-600 bg-yellow-50',
-      purple: 'text-purple-600 bg-purple-50'
+      green: 'text-green-600 bg-green-50 dark:bg-green-900/30 dark:text-green-400',
+      blue: 'text-blue-600 bg-blue-50 dark:bg-blue-900/30 dark:text-blue-400',
+      yellow: 'text-yellow-600 bg-yellow-50 dark:bg-yellow-900/30 dark:text-yellow-400',
+      purple: 'text-purple-600 bg-purple-50 dark:bg-purple-900/30 dark:text-purple-400'
     };
     return colors[color as keyof typeof colors] || colors.blue;
   };
 
   return (
-    <section className="py-20 bg-white">
+    <section className="py-20 bg-white dark:bg-gray-900">
       <div className="container mx-auto px-4 sm:px-6 lg:px-8">
         <div className="text-center mb-16">
-          <h2 className="text-3xl md:text-4xl font-bold text-gray-900 mb-4">
+          <h2 className="text-3xl md:text-4xl font-bold text-gray-900 dark:text-gray-100 mb-4">
             Trusted by
             <span className="bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent"> Industry Leaders</span>
           </h2>
-          <p className="text-xl text-gray-600 max-w-2xl mx-auto">
+          <p className="text-xl text-gray-600 dark:text-gray-300 max-w-2xl mx-auto">
             Our AI-powered platform delivers measurable results for businesses of all sizes.
           </p>
         </div>
@@ -60,10 +60,10 @@ const Stats = () => {
                 <div className={`w-16 h-16 rounded-2xl ${getColorClasses(stat.color)} flex items-center justify-center mx-auto mb-4`}>
                   <Icon className="w-8 h-8" />
                 </div>
-                <div className="text-3xl md:text-4xl font-bold text-gray-900 mb-2">
+                <div className="text-3xl md:text-4xl font-bold text-gray-900 dark:text-gray-100 mb-2">
                   {stat.value}
                 </div>
-                <div className="text-gray-600 font-medium">
+                <div className="text-gray-600 dark:text-gray-400 font-medium">
                   {stat.label}
                 </div>
               </div>

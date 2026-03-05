@@ -1,6 +1,7 @@
 /**
  * MCP Tool for creating Facebook ad sets with dynamic objective-based parameters
  */
+import { getBaseUrl, resolveToken, clean, getCampaignInfo } from './_shared-helpers.js';
 
 /**
  * Create a Facebook ad set with dynamic optimization based on campaign objective
@@ -8,7 +9,7 @@
 const executeFunction = async ({ 
   account_id,
   campaign_id,
-  campaign_objective, // User selects this to show relevant parameters
+  campaign_objective,
   name,
   optimization_goal = null,
   billing_event = null,
@@ -27,20 +28,6 @@ const executeFunction = async ({
   dsa_payor = null,
   dsa_beneficiary = null
 }) => {
-  // Only import and initialize Node-only dependencies at execution time
-  const { createClient } = await import('@supabase/supabase-js');
-  
-  // Create Supabase client only when function executes
-  const supabase = createClient(
-    process.env.SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY,
-    {
-      auth: {
-        autoRefreshToken: false,
-        persistSession: false
-      }
-    }
-  );
 
   // Complete objective configurations based on Facebook API v23.0 and ODAX
   const OBJECTIVE_CONFIGS = {
@@ -118,105 +105,6 @@ const executeFunction = async ({
     }
   };
 
-  // Helper functions
-  const getUserFromAccount = async (supabase, accountId) => {
-    console.log('🔍 Finding user for account ID:', accountId);
-    
-    if (!accountId) {
-      throw new Error('Account ID is required');
-    }
-
-    try {
-      const accountIdStr = String(accountId).trim();
-      
-      const { data: allData, error: allError } = await supabase
-        .from('facebook_ad_accounts')
-        .select('user_id, id, name')
-        .eq('id', accountIdStr);
-
-      if (allError) {
-        console.error('❌ Account lookup error:', allError);
-        throw new Error(`Account lookup failed: ${allError.message}`);
-      }
-
-      if (!allData || allData.length === 0) {
-        throw new Error(`Ad account ${accountIdStr} not found in database. Check if the account ID is correct.`);
-      }
-
-      const userData = allData[0];
-      
-      if (!userData.user_id) {
-        throw new Error(`Account ${accountIdStr} found but has no associated user_id`);
-      }
-      
-      console.log('✅ Found user ID:', userData.user_id, 'for account:', userData.name);
-      return userData.user_id;
-    } catch (error) {
-      console.error('💥 Error in getUserFromAccount:', error);
-      throw error;
-    }
-  };
-
-  const getFacebookToken = async (supabase, userId) => {
-    console.log('🔍 Attempting to get Facebook token for userId:', userId);
-    
-    if (!userId) {
-      throw new Error('User ID is required');
-    }
-
-    try {
-      const { data, error } = await supabase
-        .from('users')
-        .select('facebook_long_lived_token')
-        .eq('id', userId)
-        .single();
-
-      if (error) {
-        throw new Error(`Supabase query failed: ${error.message}`);
-      }
-
-      if (!data || !data.facebook_long_lived_token) {
-        return null;
-      }
-
-      console.log('✅ Facebook token retrieved successfully');
-      return data.facebook_long_lived_token;
-    } catch (error) {
-      console.error('💥 Error in getFacebookToken:', error);
-      throw error;
-    }
-  };
-
-  const getCampaignInfo = async (campaignId, token) => {
-    const API_VERSION = process.env.FACEBOOK_API_VERSION || 'v23.0';
-    const url = `https://graph.facebook.com/${API_VERSION}/${campaignId}?fields=objective,daily_budget,lifetime_budget&access_token=${token}`;
-    
-    try {
-      const response = await fetch(url);
-      const campaignData = await response.json();
-      
-      if (campaignData.error) {
-        throw new Error(`Campaign lookup failed: ${campaignData.error.message}`);
-      }
-      
-      const cboEnabled = !!(campaignData.daily_budget || campaignData.lifetime_budget);
-      
-      console.log('📊 Campaign info:', { 
-        objective: campaignData.objective, 
-        cboEnabled, 
-        campaignData 
-      });
-      
-      return {
-        objective: campaignData.objective,
-        cboEnabled
-      };
-    } catch (error) {
-      console.error('⚠️ Could not get campaign info:', error.message);
-      throw new Error(`Unable to retrieve campaign information: ${error.message}`);
-    }
-  };
-
   const applyObjectiveDefaults = (objectiveKey, params) => {
     const config = OBJECTIVE_CONFIGS[objectiveKey];
     
@@ -291,9 +179,7 @@ const executeFunction = async ({
     return params;
   };
 
-  // Main execution logic
-  const API_VERSION = process.env.FACEBOOK_API_VERSION || 'v23.0';
-  const baseUrl = `https://graph.facebook.com/${API_VERSION}`;
+  const baseUrl = getBaseUrl();
   
   // Validate required params
   if (!account_id) {
@@ -318,18 +204,9 @@ const executeFunction = async ({
   try {
     console.log('🔍 Processing ad set creation for account:', account_id);
 
-    // Step 1: Get user and token
-    const userId = await getUserFromAccount(supabase, account_id);
-    const token = await getFacebookToken(supabase, userId);
-    
-    if (!token) {
-      return { 
-        error: 'No Facebook access token found for the user who owns this ad account',
-        details: `Account ${account_id} belongs to user ${userId} but they have no Facebook token`
-      };
-    }
+    const { token } = await resolveToken(account_id);
 
-    // Step 2: Get campaign info
+    // Get campaign info
     const campaignInfo = await getCampaignInfo(campaign_id, token);
     
     // Use detected objective if not provided by user
@@ -775,7 +652,7 @@ const apiTool = {
   definition: {
     type: 'function',
     function: {
-      name: 'create-ad-set',
+      name: 'create_ad_set',
       description: 'Create a Facebook ad set with dynamic optimization based on campaign objective. Select campaign_objective first to see relevant parameters for that objective type.',
       parameters: {
         type: 'object',

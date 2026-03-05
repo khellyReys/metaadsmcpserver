@@ -1,77 +1,86 @@
 /**
- * Function to search for interests on Facebook Marketing API.
- *
- * @param {Object} args - Arguments for the search.
- * @param {string} args.type - The type of interest to search for (e.g., adinterest).
- * @param {string} args.q - The search query for interests.
- * @param {string} args.locale - The locale for the search.
- * @returns {Promise<Object>} - The result of the interest search.
+ * Search for interests, locations, demographics, and other targeting options
+ * on the Facebook Marketing API.
  */
-const executeFunction = async ({ type, q, locale }) => {
-  const baseUrl = ''; // will be provided by the user
-  const token = process.env.FACEBOOK_MARKETING_API_API_KEY;
+import { getSupabaseClient, getTokenForUser } from './_token-utils.js';
+import { getBaseUrl, safeFacebookError } from './_shared-helpers.js';
+
+const executeFunction = async ({ userId, type = 'adinterest', query, locale = 'en_US' }) => {
+  const supabase = getSupabaseClient();
+  const token = await getTokenForUser(supabase, userId);
+  if (!token) return { error: 'No Facebook access token found for this user' };
+
+  if (!query || !String(query).trim()) {
+    return { error: 'query is required. Enter a keyword to search for (e.g. "fitness", "Manila", "engineering").' };
+  }
+
   try {
-    // Construct the URL with query parameters
-    const url = new URL(`${baseUrl}/search`);
+    const url = new URL(`${getBaseUrl()}/search`);
     url.searchParams.append('type', type);
-    url.searchParams.append('q', q);
+    url.searchParams.append('q', query);
     url.searchParams.append('locale', locale);
 
-    // Set up headers for the request
-    const headers = {
-      'Authorization': `Bearer ${token}`
-    };
-
-    // Perform the fetch request
     const response = await fetch(url.toString(), {
       method: 'GET',
-      headers
+      headers: { 'Authorization': `Bearer ${token}` }
     });
 
-    // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
-      console.error('Error searching for interests:', JSON.stringify(errorData));
-      throw new Error(errorData);
+      throw new Error(safeFacebookError(errorData));
     }
 
-    // Parse and return the response data
-    const data = await response.json();
-    return data;
+    return await response.json();
   } catch (error) {
-    console.error('Error searching for interests:', error);
-    return { error: 'An error occurred while searching for interests.' };
+    console.error('Error in search:', error);
+    return { error: 'An error occurred while searching.', details: error.message };
   }
 };
 
-/**
- * Tool configuration for searching interests on Facebook Marketing API.
- * @type {Object}
- */
 const apiTool = {
   function: executeFunction,
   definition: {
     type: 'function',
     function: {
-      name: 'GetSearchInterest',
-      description: 'Search for interests on Facebook Marketing API.',
+      name: 'get_search_interest',
+      description: 'Search for interests, locations, demographics, and other targeting options on the Facebook Marketing API. Use the results for ad set detailed targeting.',
       parameters: {
         type: 'object',
         properties: {
+          userId: {
+            type: 'string',
+            description: 'The user ID (Supabase auth) to retrieve the Facebook token.'
+          },
           type: {
             type: 'string',
-            description: 'The type of interest to search for.'
+            enum: [
+              'adinterest',
+              'adinterestsuggestion',
+              'adinterestvalid',
+              'adgeolocation',
+              'adcountry',
+              'adregion',
+              'adcity',
+              'adlocale',
+              'adTargetingCategory',
+              'adeducationschool',
+              'adeducationmajor',
+              'adworkemployer',
+              'adworkposition'
+            ],
+            description: 'What to search for (default: adinterest). Examples: "adinterest" for interests like fitness/cooking, "adgeolocation" for cities/regions, "adworkposition" for job titles, "adinterestsuggestion" for related interests.'
           },
-          q: {
+          query: {
             type: 'string',
-            description: 'The search query for interests.'
+            description: 'The search keyword. Examples: "fitness" (interests), "Manila" (locations), "engineering" (job titles), "Harvard" (schools).'
           },
           locale: {
             type: 'string',
-            description: 'The locale for the search.'
+            enum: ['en_US', 'en_GB', 'es_ES', 'fr_FR', 'de_DE', 'it_IT', 'pt_BR', 'ja_JP', 'ko_KR', 'zh_CN', 'zh_TW', 'fil_PH', 'tl_PH', 'th_TH', 'vi_VN', 'id_ID', 'ms_MY', 'ar_AR', 'hi_IN'],
+            description: 'Locale for results (default: en_US). Use fil_PH for Filipino, tl_PH for Tagalog.'
           }
         },
-        required: ['type', 'q', 'locale']
+        required: ['userId', 'query']
       }
     }
   }

@@ -1,72 +1,58 @@
 /**
- * Function to get reach frequency predictions from the Facebook Marketing API.
- *
- * @param {Object} args - Arguments for the request.
- * @param {string} args.account_id - The ad account ID.
- * @param {string} args.token - The access token for authentication.
- * @param {string} [args.base_url='https://graph.facebook.com/v12.0'] - The base URL for the Facebook API.
- * @returns {Promise<Object>} - The response from the API containing reach frequency predictions.
+ * Get reach frequency predictions for a Facebook Ad Account.
  */
-const executeFunction = async ({ account_id, token, base_url = 'https://graph.facebook.com/v12.0' }) => {
-  const url = `${base_url}/act_${account_id}/reachfrequencypredictions?fields=external_maximum_impression,external_budget,time_updated,pause_periods,audience_size_lower_bound,external_maximum_budget,prediction_mode,external_maximum_reach,holdout_percentage,prediction_progress,target_spec,id,story_event_type,audience_size_upper_bound,external_minimum_reach,reservation_status,time_created,external_impression,external_minimum_impression,expiration_time,external_minimum_budget,account_id,interval_frequency_cap_reset_period,campaign_time_stop,destination_id,status,external_reach,frequency_cap,campaign_group_id,campaign_id,campaign_time_start,instagram_destination_id,name`;
+import { getSupabaseClient, getTokenForAccount } from './_token-utils.js';
+import { getBaseUrl, normalizeAccountId, safeFacebookError } from './_shared-helpers.js';
+
+const DEFAULT_FIELDS = 'id,name,account_id,status,prediction_mode,prediction_progress,reservation_status,audience_size_lower_bound,audience_size_upper_bound,external_budget,external_reach,external_impression,external_minimum_budget,external_maximum_budget,external_minimum_reach,external_maximum_reach,external_minimum_impression,external_maximum_impression,frequency_cap,holdout_percentage,campaign_id,campaign_group_id,campaign_time_start,campaign_time_stop,time_created,time_updated,expiration_time,target_spec,destination_id,instagram_destination_id,interval_frequency_cap_reset_period,pause_periods,story_event_type';
+
+const executeFunction = async ({ account_id, fields }) => {
+  const supabase = getSupabaseClient();
+  const acctId = normalizeAccountId(account_id);
+  const token = await getTokenForAccount(supabase, acctId);
+  if (!token) return { error: 'No Facebook access token found for this ad account' };
 
   try {
-    // Set up headers for the request
-    const headers = {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    };
+    const url = new URL(`${getBaseUrl()}/act_${acctId}/reachfrequencypredictions`);
+    url.searchParams.append('fields', fields || DEFAULT_FIELDS);
 
-    // Perform the fetch request
-    const response = await fetch(url, {
+    const response = await fetch(url.toString(), {
       method: 'GET',
-      headers
+      headers: { 'Authorization': `Bearer ${token}` }
     });
 
-    // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
-      console.error('Error fetching reach frequency predictions:', JSON.stringify(errorData));
-      throw new Error(errorData);
+      throw new Error(safeFacebookError(errorData));
     }
 
-    // Parse and return the response data
-    const data = await response.json();
-    return data;
+    return await response.json();
   } catch (error) {
     console.error('Error fetching reach frequency predictions:', error);
-    return { error: 'An error occurred while fetching reach frequency predictions.' };
+    return { error: 'An error occurred while fetching reach frequency predictions.', details: error.message };
   }
 };
 
-/**
- * Tool configuration for getting reach frequency predictions from the Facebook Marketing API.
- * @type {Object}
- */
 const apiTool = {
   function: executeFunction,
   definition: {
     type: 'function',
     function: {
-      name: 'GetReachFrequencyPredictions',
-      description: 'Get reach frequency predictions for a specific ad account.',
+      name: 'get_reach_frequency_predictions',
+      description: 'Get reach frequency predictions for a specific ad account from the Facebook Marketing API.',
       parameters: {
         type: 'object',
         properties: {
           account_id: {
             type: 'string',
-            description: 'The ad account ID.'
+            description: 'The ad account ID (without act_ prefix).'
           },
-          token: {
+          fields: {
             type: 'string',
-            description: 'The access token for authentication.'
-          },
-          base_url: {
-            type: 'string',
-            description: 'The base URL for the Facebook API.'
+            description: 'Comma-separated fields to retrieve (optional, uses comprehensive defaults).'
           }
         },
-        required: ['account_id', 'token']
+        required: ['account_id']
       }
     }
   }

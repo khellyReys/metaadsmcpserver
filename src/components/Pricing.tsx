@@ -55,14 +55,14 @@ const Pricing = () => {
   ];
 
   return (
-    <section id="pricing" className="py-20 bg-gradient-to-br from-blue-50 to-purple-50">
+    <section id="pricing" className="py-20 bg-gradient-to-br from-blue-50 to-purple-50 dark:from-gray-800 dark:to-gray-900">
       <div className="container mx-auto px-4 sm:px-6 lg:px-8">
         <div className="text-center mb-16">
-          <h2 className="text-3xl md:text-4xl font-bold text-gray-900 mb-4">
+          <h2 className="text-3xl md:text-4xl font-bold text-gray-900 dark:text-gray-100 mb-4">
             Simple, Transparent
             <span className="bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent"> Pricing</span>
           </h2>
-          <p className="text-xl text-gray-600 max-w-2xl mx-auto">
+          <p className="text-xl text-gray-600 dark:text-gray-300 max-w-2xl mx-auto">
             Choose the perfect plan for your business needs. All plans include our core AI features.
           </p>
         </div>
@@ -71,10 +71,10 @@ const Pricing = () => {
           {plans.map((plan, index) => (
             <div 
               key={index}
-              className={`relative bg-white rounded-2xl p-8 border-2 transition-all duration-300 hover:shadow-xl ${
+              className={`relative bg-white dark:bg-gray-800 rounded-2xl p-8 border-2 transition-all duration-300 hover:shadow-xl ${
                 plan.popular 
-                  ? 'border-blue-500 shadow-lg scale-105' 
-                  : 'border-gray-200 hover:border-gray-300'
+                  ? 'border-blue-500 dark:border-blue-400 shadow-lg scale-105' 
+                  : 'border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500'
               }`}
             >
               {plan.popular && (
@@ -87,11 +87,11 @@ const Pricing = () => {
               )}
 
               <div className="text-center mb-8">
-                <h3 className="text-2xl font-bold text-gray-900 mb-2">{plan.name}</h3>
-                <p className="text-gray-600 mb-4">{plan.description}</p>
+                <h3 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-2">{plan.name}</h3>
+                <p className="text-gray-600 dark:text-gray-400 mb-4">{plan.description}</p>
                 <div className="flex items-baseline justify-center">
-                  <span className="text-4xl font-bold text-gray-900">{plan.price}</span>
-                  {plan.period && <span className="text-gray-600 ml-1">{plan.period}</span>}
+                  <span className="text-4xl font-bold text-gray-900 dark:text-gray-100">{plan.price}</span>
+                  {plan.period && <span className="text-gray-600 dark:text-gray-400 ml-1">{plan.period}</span>}
                 </div>
               </div>
 
@@ -99,7 +99,7 @@ const Pricing = () => {
                 {plan.features.map((feature, featureIndex) => (
                   <li key={featureIndex} className="flex items-center">
                     <Check className="w-5 h-5 text-green-500 mr-3 flex-shrink-0" />
-                    <span className="text-gray-700">{feature}</span>
+                    <span className="text-gray-700 dark:text-gray-300">{feature}</span>
                   </li>
                 ))}
               </ul>
@@ -108,7 +108,7 @@ const Pricing = () => {
                 className={`w-full py-3 px-6 rounded-lg font-medium transition-all duration-200 ${
                   plan.popular
                     ? 'bg-gradient-to-r from-blue-600 to-purple-600 text-white hover:shadow-lg'
-                    : 'bg-gray-100 text-gray-900 hover:bg-gray-200'
+                    : 'bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-gray-100 hover:bg-gray-200 dark:hover:bg-gray-600'
                 }`}
               >
                 {plan.buttonText}

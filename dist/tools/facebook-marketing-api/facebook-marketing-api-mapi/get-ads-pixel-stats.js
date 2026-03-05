@@ -3,52 +3,39 @@
  *
  * @param {Object} args - Arguments for the request.
  * @param {string} args.pixel_id - The ID of the pixel for which to retrieve statistics.
- * @param {string} [args.base_url='https://graph.facebook.com/v12.0'] - The base URL for the Facebook Graph API.
+ * @param {string} args.userId - The user ID to retrieve the Facebook token from Supabase.
+ * @param {string} [args.base_url] - The base URL for the Facebook Graph API (optional).
  * @returns {Promise<Object>} - The statistics for the specified Ads Pixel.
  */
-const executeFunction = async ({ pixel_id, base_url = 'https://graph.facebook.com/v12.0' }) => {
-  const token = process.env.FACEBOOK_MARKETING_API_API_KEY;
+import { getSupabaseClient, getTokenForUser } from './_token-utils.js';
+
+const executeFunction = async ({ pixel_id, userId, base_url }) => {
+  const base = base_url || `https://graph.facebook.com/${process.env.FACEBOOK_API_VERSION || 'v22.0'}`;
+  const supabase = getSupabaseClient();
+  const token = await getTokenForUser(supabase, userId);
+  if (!token) return { error: 'No Facebook access token found for this user' };
   try {
-    // Construct the URL for the request
-    const url = `${base_url}/${pixel_id}/stats`;
-
-    // Set up headers for the request
-    const headers = {
-      'Authorization': `Bearer ${token}`
-    };
-
-    // Perform the fetch request
-    const response = await fetch(url, {
-      method: 'GET',
-      headers
-    });
-
-    // Check if the response was successful
+    const url = `${base}/${pixel_id}/stats`;
+    const headers = { 'Authorization': `Bearer ${token}` };
+    const response = await fetch(url, { method: 'GET', headers });
     if (!response.ok) {
       const errorData = await response.json();
       console.error('Error fetching Ads Pixel statistics:', JSON.stringify(errorData));
-      throw new Error(errorData);
+      throw new Error(errorData?.error?.message || response.statusText);
     }
-
-    // Parse and return the response data
-    const data = await response.json();
-    return data;
+    return await response.json();
   } catch (error) {
     console.error('Error fetching Ads Pixel statistics:', error);
-    return { error: 'An error occurred while fetching Ads Pixel statistics.' };
+    return { error: error.message || 'An error occurred while fetching Ads Pixel statistics.' };
   }
 };
 
-/**
- * Tool configuration for getting Ads Pixel statistics from the Facebook Marketing API.
- * @type {Object}
- */
 const apiTool = {
   function: executeFunction,
   definition: {
     type: 'function',
     function: {
-      name: 'GetAdsPixelStats',
+      name: 'get_pixel_stats',
       description: 'Retrieve statistics for a specified Ads Pixel.',
       parameters: {
         type: 'object',
@@ -57,12 +44,16 @@ const apiTool = {
             type: 'string',
             description: 'The ID of the pixel for which to retrieve statistics.'
           },
+          userId: {
+            type: 'string',
+            description: 'The user ID (Supabase auth) to retrieve the Facebook token.'
+          },
           base_url: {
             type: 'string',
-            description: 'The base URL for the Facebook Graph API.'
+            description: 'The base URL for the Facebook Graph API (optional).'
           }
         },
-        required: ['pixel_id']
+        required: ['pixel_id', 'userId']
       }
     }
   }

@@ -2,35 +2,36 @@
  * Function to get ad set fields from the Facebook Marketing API.
  *
  * @param {Object} args - Arguments for the ad set fields retrieval.
+ * @param {string} args.userId - The user ID (Supabase auth) to retrieve the Facebook token.
  * @param {string} args.adset_id - The ID of the ad set to retrieve fields for.
- * @param {string} args.base_url - The base URL for the Facebook Marketing API.
  * @returns {Promise<Object>} - The result of the ad set fields retrieval.
  */
-const executeFunction = async ({ adset_id, base_url }) => {
-  const token = process.env.FACEBOOK_MARKETING_API_API_KEY;
-  try {
-    // Construct the URL for the request
-    const url = `${base_url}/${adset_id}?fields=account_id,campaign_id,created_time,effective_status,id,name,recommendations,status`;
+import { getSupabaseClient, getTokenForUser } from './_token-utils.js';
+import { getBaseUrl, safeFacebookError } from './_shared-helpers.js';
 
-    // Set up headers for the request
+const FIELDS = 'account_id,campaign_id,created_time,effective_status,id,name,recommendations,status,daily_budget,lifetime_budget,budget_remaining,optimization_goal,billing_event,bid_strategy,bid_amount,targeting,start_time,end_time,promoted_object';
+
+const executeFunction = async ({ userId, adset_id }) => {
+  const base = getBaseUrl();
+  const supabase = getSupabaseClient();
+  const token = await getTokenForUser(supabase, userId);
+  if (!token) return { error: 'No Facebook access token found for this user' };
+  try {
+    const url = new URL(`${base}/${adset_id}`);
+    url.searchParams.append('fields', FIELDS);
+
     const headers = {
       'Authorization': `Bearer ${token}`
     };
 
-    // Perform the fetch request
-    const response = await fetch(url, {
-      method: 'GET',
-      headers
-    });
+    const response = await fetch(url.toString(), { method: 'GET', headers });
 
-    // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
       console.error('Error retrieving ad set fields:', JSON.stringify(errorData));
-      throw new Error(errorData);
+      throw new Error(safeFacebookError(errorData));
     }
 
-    // Parse and return the response data
     const data = await response.json();
     return data;
   } catch (error) {
@@ -39,30 +40,26 @@ const executeFunction = async ({ adset_id, base_url }) => {
   }
 };
 
-/**
- * Tool configuration for retrieving ad set fields from the Facebook Marketing API.
- * @type {Object}
- */
 const apiTool = {
   function: executeFunction,
   definition: {
     type: 'function',
     function: {
-      name: 'GetAdsetFields',
+      name: 'get_adset_fields',
       description: 'Retrieve fields for a specific ad set from the Facebook Marketing API.',
       parameters: {
         type: 'object',
         properties: {
+          userId: {
+            type: 'string',
+            description: 'The user ID (Supabase auth) to retrieve the Facebook token.'
+          },
           adset_id: {
             type: 'string',
             description: 'The ID of the ad set to retrieve fields for.'
-          },
-          base_url: {
-            type: 'string',
-            description: 'The base URL for the Facebook Marketing API.'
           }
         },
-        required: ['adset_id', 'base_url']
+        required: ['userId', 'adset_id']
       }
     }
   }

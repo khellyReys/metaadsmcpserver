@@ -2,36 +2,38 @@
  * Function to get details from an Ad ID using the Facebook Marketing API.
  *
  * @param {Object} args - Arguments for the request.
+ * @param {string} args.userId - The user ID (Supabase auth) to retrieve the Facebook token.
  * @param {string} args.ad_id - The ID of the ad to retrieve details for.
- * @param {string} args.base_url - The base URL for the Facebook Marketing API.
+ * @param {string} [args.base_url] - The base URL for the Facebook Marketing API (optional).
  * @returns {Promise<Object>} - The details of the ad.
  */
-const executeFunction = async ({ ad_id, base_url }) => {
-  const token = process.env.FACEBOOK_MARKETING_API_API_KEY;
-  try {
-    // Construct the URL for the request
-    const url = `${base_url}/${ad_id}/?fields=account_id,adset_id,bid_amount,campaign_id,configured_status,conversion_specs,created_time,creative,display_sequence,effective_status,id,last_updated_by_app_id,name,priority,recommendations,source_ad_id,status,targeting,tracking_specs,updated_time`;
+import { getSupabaseClient, getTokenForUser } from './_token-utils.js';
+import { getBaseUrl, safeFacebookError } from './_shared-helpers.js';
 
-    // Set up headers for the request
+const executeFunction = async ({ userId, ad_id, base_url }) => {
+  const base = base_url || getBaseUrl();
+  const supabase = getSupabaseClient();
+  const token = await getTokenForUser(supabase, userId);
+  if (!token) return { error: 'No Facebook access token found for this user' };
+  try {
+    const url = `${base}/${ad_id}/?fields=account_id,adset_id,bid_amount,campaign_id,configured_status,conversion_specs,created_time,creative,display_sequence,effective_status,id,last_updated_by_app_id,name,priority,recommendations,source_ad_id,status,targeting,tracking_specs,updated_time`;
+
     const headers = {
       'Authorization': `Bearer ${token}`,
       'Content-Type': 'application/json'
     };
 
-    // Perform the fetch request
     const response = await fetch(url, {
       method: 'GET',
       headers
     });
 
-    // Check if the response was successful
     if (!response.ok) {
       const errorData = await response.json();
       console.error('Error getting ad details:', JSON.stringify(errorData));
-      throw new Error(errorData);
+      throw new Error(safeFacebookError(errorData));
     }
 
-    // Parse and return the response data
     const data = await response.json();
     return data;
   } catch (error) {
@@ -49,21 +51,25 @@ const apiTool = {
   definition: {
     type: 'function',
     function: {
-      name: 'GetDetailsFromAdID',
+      name: 'get_ad_details',
       description: 'Get details from an Ad ID using the Facebook Marketing API.',
       parameters: {
         type: 'object',
         properties: {
+          userId: {
+            type: 'string',
+            description: 'The user ID (Supabase auth) to retrieve the Facebook token.'
+          },
           ad_id: {
             type: 'string',
             description: 'The ID of the ad to retrieve details for.'
           },
           base_url: {
             type: 'string',
-            description: 'The base URL for the Facebook Marketing API.'
+            description: 'The base URL for the Facebook Marketing API (optional).'
           }
         },
-        required: ['ad_id', 'base_url']
+        required: ['userId', 'ad_id']
       }
     }
   }
