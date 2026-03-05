@@ -425,8 +425,22 @@ async function run() {
         const rawSessionId = req.headers["mcp-session-id"];
         const sessionId = Array.isArray(rawSessionId) ? rawSessionId[0] : rawSessionId;
         const normalizedSessionId = typeof sessionId === "string" ? sessionId.trim() : "";
-        const isInitRequest = req.method === "POST" && isInitializeRequest(req.body);
+        const rpcMethod = req.body?.method;
+        const isInitRequest =
+          req.method === "POST" &&
+          (isInitializeRequest(req.body) || rpcMethod === "initialize");
         let transport;
+
+        // Compatibility fallback for clients that probe tools/list before initialize.
+        // We still support full session-based MCP, but this avoids hard-failing noncompliant probes.
+        if (!normalizedSessionId && req.method === "POST" && rpcMethod === "tools/list") {
+          const t = await transformTools(tools);
+          return res.status(200).json({
+            jsonrpc: "2.0",
+            id: req.body?.id ?? null,
+            result: { tools: t },
+          });
+        }
 
         if (normalizedSessionId && transports[normalizedSessionId]) {
           const existing = transports[normalizedSessionId];
