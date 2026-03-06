@@ -51,7 +51,7 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'get_offline_conversions',
-      description: 'Get offline conversion data sets for a specified ad account.',
+      description: 'Retrieve offline conversion data sets for a Facebook Ad Account, including set name, description, valid/matched entry counts, event time range, event stats, and business association. The account_id is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {

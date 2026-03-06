@@ -224,7 +224,7 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'create_ad_set_awareness',
-      description: 'Create a Facebook ad set for AWARENESS campaigns. Optimized for brand awareness, reach, and ad recall with comprehensive parameter control.',
+      description: 'Create a Facebook ad set optimized for AWARENESS campaigns (brand awareness, reach, and ad recall). Supports reach and frequency buying, frequency caps, targeting by demographics/interests/behaviors/locations, daily or lifetime budgets, scheduling, and placement controls. The account_id and page_id are auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {

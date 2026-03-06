@@ -3,7 +3,7 @@
  * Supports LINK, VIDEO, and CAROUSEL creatives via object_story_spec
  *
  * Flow:
- *  1) Look up user for account_id -> fetch FB long-lived token from Supabase
+ *  1) Look up user for account_id -> fetch FB long-lived token
  *  2) Build object_story_spec based on creative_type
  *  3) POST /act_<account_id>/adcreatives
  *  4) POST /act_<account_id>/ads with returned creative_id
@@ -256,7 +256,7 @@ const executeFunction = async ({
       function: {
         name: 'create_ad_with_creative',
         description:
-          'Create a Facebook Ad Creative and then the Ad in a single call. Supports LINK, VIDEO, and CAROUSEL object_story_spec.',
+          'Create a Facebook Ad Creative and Ad in a single call. Builds the creative (LINK with image, VIDEO with thumbnail, or CAROUSEL with multiple cards) and immediately creates an ad referencing it. Supports page_id or instagram_actor_id as the publishing actor, custom call-to-action, URL tags, and tracking specs. The account_id and page_id are auto-filled from server workspace if not provided.',
         parameters: {
           type: 'object',
           properties: {

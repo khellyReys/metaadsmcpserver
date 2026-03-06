@@ -55,7 +55,7 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'get_pixel_details',
-      description: 'Get pixel details from the Facebook Marketing API.',
+      description: 'Retrieve all Facebook Pixels associated with an ad account, including pixel ID, name, creation date, and data use settings. Use the returned pixel IDs when creating conversion-optimized ad sets. The account_id is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {

@@ -2,7 +2,7 @@
  * Function to get ad set fields from the Facebook Marketing API.
  *
  * @param {Object} args - Arguments for the ad set fields retrieval.
- * @param {string} args.userId - The user ID (Supabase auth) to retrieve the Facebook token.
+ * @param {string} args.userId - The authenticated user ID.
  * @param {string} args.adset_id - The ID of the ad set to retrieve fields for.
  * @returns {Promise<Object>} - The result of the ad set fields retrieval.
  */
@@ -46,13 +46,13 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'get_adset_fields',
-      description: 'Retrieve fields for a specific ad set from the Facebook Marketing API.',
+      description: 'Retrieve all fields for a single ad set by ID, including budget, bid strategy, optimization goal, targeting criteria, promoted object, billing event, schedule, and delivery status. The userId is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {
           userId: {
             type: 'string',
-            description: 'The user ID (Supabase auth) to retrieve the Facebook token.'
+            description: 'The authenticated user ID (auto-filled from server workspace if not provided).'
           },
           adset_id: {
             type: 'string',

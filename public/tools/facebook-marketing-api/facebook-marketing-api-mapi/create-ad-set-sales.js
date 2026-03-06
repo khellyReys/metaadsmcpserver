@@ -289,7 +289,7 @@ const executeFunction = async ({
       function: {
         name: 'create_ad_set_sales',
         description:
-          'Create a Facebook ad set for SALES campaigns with a minimal, focused parameter set.',
+          'Create a Facebook ad set for SALES campaigns. Supports conversion locations (WEBSITE, APP, MESSAGING, WEBSITE_AND_APP, SHOP) with automatic validation of required fields per location (pixel_id for website, application_id for app). Handles targeting, budgets, scheduling, bid strategy, and promoted objects. The account_id and page_id are auto-filled from server workspace if not provided.',
         parameters: {
           type: 'object',
           properties: {

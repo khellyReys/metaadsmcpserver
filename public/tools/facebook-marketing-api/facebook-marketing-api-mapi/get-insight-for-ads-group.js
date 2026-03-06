@@ -2,7 +2,7 @@
  * Function to get insights for an ads group from the Facebook Marketing API.
  *
  * @param {Object} args - Arguments for the insights request.
- * @param {string} args.userId - The user ID (Supabase auth) to retrieve the Facebook token.
+ * @param {string} args.userId - The authenticated user ID.
  * @param {string} args.ad_id - The ID of the ad for which insights are requested.
  * @param {string} [args.date_preset="maximum"] - The date preset for the insights.
  * @param {number} [args.limit=100] - The number of insights to return.
@@ -66,13 +66,13 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'get_ad_insights',
-      description: 'Get insights for a specific ads group from Facebook Marketing API.',
+      description: 'Retrieve detailed performance insights for a single ad by its ID, including spend, impressions, clicks, reach, frequency, video metrics, conversions, and action breakdowns. Supports date range filtering. The userId is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {
           userId: {
             type: 'string',
-            description: 'The user ID (Supabase auth) to retrieve the Facebook token.'
+            description: 'The authenticated user ID (auto-filled from server workspace if not provided).'
           },
           ad_id: {
             type: 'string',

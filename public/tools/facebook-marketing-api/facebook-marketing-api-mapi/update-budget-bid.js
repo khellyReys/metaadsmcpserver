@@ -1,5 +1,5 @@
 /**
- * Update the budget and bid strategy for a Facebook campaign.
+ * Update the budget and bid strategy for an existing Facebook campaign. Supports daily_budget or lifetime_budget (in cents), bid strategy (LOWEST_COST_WITHOUT_CAP, LOWEST_COST_WITH_BID_CAP, COST_CAP, LOWEST_COST_WITH_MIN_ROAS), and campaign end time. Only provided fields are updated. The userId is auto-filled from server workspace if not provided.
  */
 import { getSupabaseClient, getTokenForUser } from './_token-utils.js';
 import { getBaseUrl, safeFacebookError } from './_shared-helpers.js';
@@ -39,13 +39,13 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'update_budget_bid',
-      description: 'Update the budget and bid strategy for a Facebook campaign.',
+      description: 'Update the budget and bid strategy for an existing Facebook campaign. Supports daily_budget or lifetime_budget (in cents), bid strategy (LOWEST_COST_WITHOUT_CAP, LOWEST_COST_WITH_BID_CAP, COST_CAP, LOWEST_COST_WITH_MIN_ROAS), and campaign end time. Only provided fields are updated. The userId is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {
           userId: {
             type: 'string',
-            description: 'The user ID (Supabase auth) to retrieve the Facebook token.'
+            description: 'The authenticated user ID (auto-filled from server workspace if not provided).'
           },
           campaign_id: {
             type: 'string',

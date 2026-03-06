@@ -45,7 +45,7 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'get_custom_conversions',
-      description: 'Get custom conversions for a specified ad account ID.',
+      description: 'Retrieve all custom conversions defined for a Facebook Ad Account, including conversion name, rule, pixel association, and event stats. Use these IDs when setting up conversion-optimized ad sets. The account_id is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {

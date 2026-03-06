@@ -41,7 +41,7 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'get_assigned_users',
-      description: 'Get assigned users for a specified ad account. Works with both personal and business ad accounts.',
+      description: 'Retrieve all users assigned to a Facebook Ad Account with their roles and permissions. Works with both personal and Business Manager ad accounts. The account_id is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {

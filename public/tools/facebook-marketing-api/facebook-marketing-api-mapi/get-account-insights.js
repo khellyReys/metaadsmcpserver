@@ -66,7 +66,7 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'get_account_insights',
-      description: 'Get performance insights for a Facebook Ad Account. Supports flexible date ranges, reporting levels, breakdowns, and field selection.',
+      description: 'Retrieve performance insights (spend, impressions, clicks, CTR, CPC, conversions, ROAS, etc.) for a Facebook Ad Account. Supports flexible date ranges, reporting levels (account/campaign/adset/ad), breakdowns (age, gender, country, platform, placement), and custom field selection. The account_id is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {

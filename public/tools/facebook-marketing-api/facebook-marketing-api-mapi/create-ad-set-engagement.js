@@ -316,7 +316,7 @@ const executeFunction = async ({
       function: {
         name: 'create_ad_set_engagement',
         description:
-          'Create a Facebook ad set for ENGAGEMENT campaigns with focused, UI-matching parameters.',
+          'Create a Facebook ad set for ENGAGEMENT campaigns. Supports conversion locations (MESSAGING, WEBSITE, APP, PAGE) with validation of required fields per location. Optimizes for post engagement, page likes, event responses, or messaging conversations. Handles targeting, budgets, scheduling, and bid strategy. The account_id and page_id are auto-filled from server workspace if not provided.',
         parameters: {
           type: 'object',
           properties: {

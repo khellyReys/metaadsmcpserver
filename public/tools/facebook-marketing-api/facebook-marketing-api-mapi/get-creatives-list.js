@@ -50,7 +50,7 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'get_creatives_list',
-      description: 'Get the list of ad creatives from Facebook Marketing API.',
+      description: 'List all ad creatives in a Facebook Ad Account with details: title, body, image/video assets, call-to-action, object story spec, and link URL. Supports optional field selection. The account_id is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {

@@ -110,14 +110,14 @@ const apiTool = {
   definition: {
     // ✅ MCP-native (what most clients expect)
     name: 'create_ad',
-    description: 'Create a Facebook Ad referencing an existing creative_id.',
+    description: 'Create a Facebook Ad that references an existing ad creative by its creative_id. Associates the creative with an ad set and configures the ad name and status. Use create_ad_creative or create_ad_with_creative to build the creative first. Returns the created ad ID. The account_id is auto-filled from server workspace if not provided.',
     inputSchema: INPUT_SCHEMA,
 
     // ♻️ Back-compat for function-style loaders
     type: 'function',
     function: {
       name: 'create_ad',
-      description: 'Create a Facebook Ad referencing an existing creative_id.',
+      description: 'Create a Facebook Ad that references an existing ad creative by its creative_id. Associates the creative with an ad set and configures the ad name and status. Use create_ad_creative or create_ad_with_creative to build the creative first. Returns the created ad ID. The account_id is auto-filled from server workspace if not provided.',
       parameters: INPUT_SCHEMA
     }
   }

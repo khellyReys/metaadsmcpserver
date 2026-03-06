@@ -2,7 +2,7 @@
  * Function to get details from an Ad ID using the Facebook Marketing API.
  *
  * @param {Object} args - Arguments for the request.
- * @param {string} args.userId - The user ID (Supabase auth) to retrieve the Facebook token.
+ * @param {string} args.userId - The authenticated user ID.
  * @param {string} args.ad_id - The ID of the ad to retrieve details for.
  * @param {string} [args.base_url] - The base URL for the Facebook Marketing API (optional).
  * @returns {Promise<Object>} - The details of the ad.
@@ -52,13 +52,13 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'get_ad_details',
-      description: 'Get details from an Ad ID using the Facebook Marketing API.',
+      description: 'Retrieve full details of a single Facebook ad by its ID, including name, status, creative details, targeting, bid info, tracking specs, and conversion specs. The userId is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {
           userId: {
             type: 'string',
-            description: 'The user ID (Supabase auth) to retrieve the Facebook token.'
+            description: 'The authenticated user ID (auto-filled from server workspace if not provided).'
           },
           ad_id: {
             type: 'string',

@@ -51,7 +51,7 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'get_ig_accounts',
-      description: 'Retrieve Instagram accounts associated with a Facebook Ad Account.',
+      description: 'Retrieve all Instagram accounts linked to a Facebook Ad Account, including Instagram user ID, username, and profile picture. Use the returned IDs as instagram_actor_id when creating ads. The account_id is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {

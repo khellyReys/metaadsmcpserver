@@ -156,7 +156,7 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'create_campaign',
-      description: 'Create a Facebook campaign with the specified objective. Choose the appropriate objective based on your campaign goals.',
+      description: 'Create a new Facebook Ads campaign under the specified ad account. Requires an objective (OUTCOME_AWARENESS, OUTCOME_TRAFFIC, OUTCOME_ENGAGEMENT, OUTCOME_LEADS, OUTCOME_SALES, OUTCOME_APP_PROMOTION). Supports optional budget (daily/lifetime), bid strategy, schedule, special ad categories, and campaign name. Returns the created campaign ID. The account_id is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {

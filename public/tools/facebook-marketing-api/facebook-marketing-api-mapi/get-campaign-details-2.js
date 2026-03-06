@@ -3,7 +3,7 @@
  *
  * @param {Object} args - Arguments for the campaign details request.
  * @param {string} args.campaign_id - The campaign ID to fetch details for.
- * @param {string} args.userId - The user ID to retrieve the Facebook token from Supabase.
+ * @param {string} args.userId - The authenticated user ID.
  * @param {string} [args.date_preset='last_30d'] - The date preset for insights.
  * @param {string} [args.time_increment='all_days'] - The time increment for insights.
  * @param {string} [args.breakdowns=''] - Breakdowns for insights.
@@ -120,7 +120,7 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'get_campaign_details',
-      description: 'Get detailed campaign information including performance insights, ad sets, and ads from the Facebook Marketing API.',
+      description: 'Retrieve comprehensive campaign data including performance insights (spend, impressions, clicks, conversions), nested ad sets with their budgets and targeting, and individual ads with creative details. Returns a complete campaign overview in one call. The userId is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {
@@ -130,7 +130,7 @@ const apiTool = {
           },
           userId: {
             type: 'string',
-            description: 'The user ID to retrieve the Facebook token from Supabase.'
+            description: 'The authenticated user ID (auto-filled from server workspace if not provided).'
           },
           date_preset: {
             type: 'string',

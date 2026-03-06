@@ -70,13 +70,13 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'update_ad_set',
-      description: 'Update a Facebook ad set. Supports changing name, status, budget, bid, targeting, and schedule.',
+      description: 'Update an existing Facebook ad set by its ID. Supports changing name, status (ACTIVE, PAUSED, ARCHIVED), daily or lifetime budget, bid amount, targeting criteria, start/end time, and optimization goal. Only provided fields are updated. The userId is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {
           userId: {
             type: 'string',
-            description: 'The user ID (Supabase auth) to retrieve the Facebook token.'
+            description: 'The authenticated user ID (auto-filled from server workspace if not provided).'
           },
           adset_id: {
             type: 'string',

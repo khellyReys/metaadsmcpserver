@@ -1,10 +1,15 @@
 export const toolPaths = [
   // ── Read: Account ──
   'facebook-marketing-api/facebook-marketing-api-mapi/get-ad-account.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/get-ad-accounts.js',
   'facebook-marketing-api/facebook-marketing-api-mapi/get-agencies.js',
   'facebook-marketing-api/facebook-marketing-api-mapi/get-assigned-users.js',
   'facebook-marketing-api/facebook-marketing-api-mapi/get-ig-accounts.js',
   'facebook-marketing-api/facebook-marketing-api-mapi/get-advertisable-applications.js',
+
+  // ── Read: Pages ──
+  'facebook-marketing-api/facebook-marketing-api-mapi/get-account-pages.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/search-pages-by-name.js',
 
   // ── Read: Campaigns ──
   'facebook-marketing-api/facebook-marketing-api-mapi/get-campaigns-details.js',
@@ -30,6 +35,11 @@ export const toolPaths = [
   // ── Read: Targeting & Planning ──
   'facebook-marketing-api/facebook-marketing-api-mapi/get-targeting-categories.js',
   'facebook-marketing-api/facebook-marketing-api-mapi/get-search-interest.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/get-interest-suggestions.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/search-behaviors.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/search-demographics.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/search-geo-locations.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/estimate-audience-size.js',
   'facebook-marketing-api/facebook-marketing-api-mapi/get-reach-frequency-predictions.js',
 
   // ── Insights & Reports ──
@@ -41,6 +51,7 @@ export const toolPaths = [
 
   // ── Create: Campaign ──
   'facebook-marketing-api/facebook-marketing-api-mapi/create-campaign.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/create-budget-schedule.js',
 
   // ── Create: Ad Sets ──
   'facebook-marketing-api/facebook-marketing-api-mapi/create-ad-set.js',
@@ -56,11 +67,18 @@ export const toolPaths = [
   'facebook-marketing-api/facebook-marketing-api-mapi/create-ads.js',
   'facebook-marketing-api/facebook-marketing-api-mapi/create-ad-creative.js',
   'facebook-marketing-api/facebook-marketing-api-mapi/upload-ad-image.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/upload-ad-video.js',
 
   // ── Update ──
   'facebook-marketing-api/facebook-marketing-api-mapi/update-campaign.js',
   'facebook-marketing-api/facebook-marketing-api-mapi/update-ad-set.js',
   'facebook-marketing-api/facebook-marketing-api-mapi/update-ad-name-status.js',
   'facebook-marketing-api/facebook-marketing-api-mapi/update-budget-bid.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/update-ad-creative.js',
+
+  // ── Duplicate ──
   'facebook-marketing-api/facebook-marketing-api-mapi/copies-ad.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/duplicate-campaign.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/duplicate-adset.js',
+  'facebook-marketing-api/facebook-marketing-api-mapi/duplicate-creative.js',
 ];

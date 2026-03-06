@@ -52,7 +52,7 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'get_agencies',
-      description: 'Get agencies associated with a Facebook Ad Account.',
+      description: 'Retrieve the list of agencies that have access to a Facebook Ad Account, including agency name, ID, and permission details. Useful for multi-agency setups. The account_id is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {

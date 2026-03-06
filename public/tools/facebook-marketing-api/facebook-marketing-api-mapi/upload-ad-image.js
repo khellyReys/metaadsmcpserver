@@ -251,12 +251,12 @@ const apiTool = {
   function: executeFunction,
   definition: {
     name: 'upload_ad_image',
-    description: 'Upload an image to Facebook Ad Account and get the image hash for use in ad creatives. Supports both URL and file upload methods.',
+    description: 'Upload an image to a Facebook Ad Account and receive an image hash for use in ad creatives. Supports two methods: provide an image_url (downloaded and uploaded server-side) or a base64-encoded image_file with filename. Optionally organize into a creative folder. Returns the image hash needed for create_ad_creative and create_ad_with_creative. The account_id is auto-filled from server workspace if not provided.',
     inputSchema: INPUT_SCHEMA,
     type: 'function',
     function: {
       name: 'upload_ad_image',
-      description: 'Upload an image to Facebook Ad Account and get the image hash for use in ad creatives. Supports both URL and file upload methods.',
+      description: 'Upload an image to a Facebook Ad Account and receive an image hash for use in ad creatives. Supports two methods: provide an image_url (downloaded and uploaded server-side) or a base64-encoded image_file with filename. Optionally organize into a creative folder. Returns the image hash needed for create_ad_creative and create_ad_with_creative. The account_id is auto-filled from server workspace if not provided.',
       parameters: INPUT_SCHEMA
     }
   }

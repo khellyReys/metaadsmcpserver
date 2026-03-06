@@ -297,7 +297,7 @@ const apiTool = {
     function: {
       name: 'create_ad_set_app_promotion',
       description:
-        'Create a Facebook ad set for APP PROMOTION campaigns with app-store-aware validation.',
+        'Create a Facebook ad set for APP_PROMOTION campaigns. Supports app installs and app events optimization with app-store-aware validation (Google Play, iOS App Store, etc.). Requires application_id and object_store_url. Handles targeting, budgets, scheduling, bid strategy, and deep linking. The account_id is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {

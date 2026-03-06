@@ -45,7 +45,7 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'get_ad_account',
-      description: 'Retrieve details of an ad account from the Facebook Marketing API.',
+      description: 'Retrieve full details of a Facebook Ad Account including name, status, currency, timezone, spend cap, owner business, and funding source. Returns all standard account fields. The account_id is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {
