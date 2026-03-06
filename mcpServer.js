@@ -492,6 +492,40 @@ async function run() {
         // We still support full session-based MCP, but this avoids hard-failing noncompliant probes.
         if (!normalizedSessionId && req.method === "POST" && rpcMethod === "tools/list") {
           const t = await transformTools(tools);
+
+          // Inject workspace defaults from server settings (same logic as setupServerHandlers)
+          if (tokenData?.serverId) {
+            try {
+              const supabase = getSupabaseClient();
+              const { data } = await supabase
+                .from('servers')
+                .select('settings, user_id')
+                .eq('id', tokenData.serverId)
+                .single();
+              if (data) {
+                const ws = data.settings?.last_workspace || {};
+                const ctx = {
+                  userId: data.user_id || null,
+                  account_id: ws.ad_account_id || null,
+                  business_id: ws.business_id || null,
+                  page_id: ws.page_id || null,
+                };
+                const fields = ['account_id', 'business_id', 'page_id', 'userId'];
+                for (const tool of t) {
+                  const props = tool.inputSchema?.properties;
+                  if (!props) continue;
+                  for (const field of fields) {
+                    if (props[field] && ctx[field] && props[field].default === undefined) {
+                      props[field].default = ctx[field];
+                    }
+                  }
+                }
+              }
+            } catch {
+              // Best-effort; return tools without defaults
+            }
+          }
+
           return res.status(200).json({
             jsonrpc: "2.0",
             id: req.body?.id ?? null,
