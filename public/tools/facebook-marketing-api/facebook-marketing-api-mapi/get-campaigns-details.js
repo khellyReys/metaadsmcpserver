@@ -69,7 +69,7 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'get_campaigns_details',
-      description: 'Get details of campaigns from the specified ad account.',
+      description: 'List all campaigns in a Facebook Ad Account with key details: name, objective, status, budget, bid strategy, and creation date. Supports optional status filtering and field selection. The account_id is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {

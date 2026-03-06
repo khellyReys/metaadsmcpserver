@@ -72,9 +72,55 @@ async function transformTools(tools) {
     .filter(Boolean);
 }
 
-async function setupServerHandlers(server, tools) {
+async function setupServerHandlers(server, tools, serverId = null) {
+  // Lazy-cached loader: fetches workspace defaults from the server's saved settings once per session.
+  let _cachedContext = null;
+  async function getServerContext() {
+    if (_cachedContext !== null) return _cachedContext;
+    if (!serverId) { _cachedContext = false; return false; }
+    try {
+      const supabase = getSupabaseClient();
+      const { data } = await supabase
+        .from('servers')
+        .select('settings, user_id')
+        .eq('id', serverId)
+        .single();
+      if (data) {
+        const ws = data.settings?.last_workspace || {};
+        _cachedContext = {
+          userId: data.user_id || null,
+          account_id: ws.ad_account_id || null,
+          business_id: ws.business_id || null,
+          page_id: ws.page_id || null,
+        };
+        return _cachedContext;
+      }
+    } catch {
+      // Best-effort; fall through with no defaults
+    }
+    _cachedContext = false;
+    return false;
+  }
+
+  const DEFAULT_FIELDS = ['account_id', 'business_id', 'page_id', 'userId'];
+
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     const t = await transformTools(tools);
+
+    // Inject JSON-Schema default values so LLM clients can pre-fill workspace IDs
+    const ctx = await getServerContext();
+    if (ctx) {
+      for (const tool of t) {
+        const props = tool.inputSchema?.properties;
+        if (!props) continue;
+        for (const field of DEFAULT_FIELDS) {
+          if (props[field] && ctx[field] && props[field].default === undefined) {
+            props[field].default = ctx[field];
+          }
+        }
+      }
+    }
+
     return { tools: t };
   });
 
@@ -92,6 +138,17 @@ async function setupServerHandlers(server, tools) {
     }
 
     const args = request.params.arguments ?? {};
+
+    // Auto-fill workspace defaults from server settings when the client omits them
+    const ctx = await getServerContext();
+    if (ctx) {
+      for (const field of DEFAULT_FIELDS) {
+        if (!(field in args) && ctx[field]) {
+          args[field] = ctx[field];
+        }
+      }
+    }
+
     const required = tool.definition?.function?.parameters?.required || [];
     for (const param of required) {
       if (!(param in args)) {
@@ -305,8 +362,8 @@ async function run() {
           }
         };
 
-        // Setup request handlers
-        await setupServerHandlers(server, tools);
+        // Setup request handlers (pass serverId so tools get workspace defaults)
+        await setupServerHandlers(server, tools, tokenData.serverId);
 
         // Create SSE transport - CHANGE: Use /api/messages
         const transport = new SSEServerTransport("/api/messages", res);
@@ -479,7 +536,7 @@ async function run() {
             { capabilities: { tools: {} } }
           );
           server.onerror = (err) => console.error("[MCP-HTTP server error]", err);
-          await setupServerHandlers(server, tools);
+          await setupServerHandlers(server, tools, tokenData.serverId);
           await server.connect(transport);
 
           if (transport.sessionId) {

@@ -52,7 +52,7 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'get_ads_list',
-      description: 'Retrieve ads from a specified Facebook Ad Account.',
+      description: 'List all ads in a Facebook Ad Account with key fields: name, status, creative ID, ad set ID, campaign ID, and delivery info. Returns a paginated list of all ads under the account. The account_id is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {

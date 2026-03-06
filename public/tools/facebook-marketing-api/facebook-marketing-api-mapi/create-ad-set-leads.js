@@ -308,7 +308,7 @@ const executeFunction = async ({
       function: {
         name: 'create_ad_set_leads',
         description:
-          'Create a Facebook ad set for LEADS campaigns with conversion-location-aware validation.',
+          'Create a Facebook ad set for LEADS campaigns. Supports conversion locations (WEBSITE, APP, MESSAGING, INSTANT_FORMS, CALLS) with automatic validation of required fields per location (pixel_id for website, application_id for app). Optimizes for lead generation with customizable targeting, budgets, scheduling, and bid strategy. The account_id and page_id are auto-filled from server workspace if not provided.',
         parameters: {
           type: 'object',
           properties: {

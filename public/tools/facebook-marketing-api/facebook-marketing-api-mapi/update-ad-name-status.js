@@ -1,5 +1,5 @@
 /**
- * Update the name and/or status of an ad in the Facebook Marketing API.
+ * Update an existing Facebook ad by its ID. Change the ad name and/or status (ACTIVE, PAUSED, ARCHIVED). Only provided fields are modified. The userId is auto-filled from server workspace if not provided.
  */
 import { getSupabaseClient, getTokenForUser } from './_token-utils.js';
 import { getBaseUrl, safeFacebookError } from './_shared-helpers.js';
@@ -37,13 +37,13 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'update_ad_status',
-      description: 'Update the name and/or status of an ad in the Facebook Marketing API.',
+      description: 'Update an existing Facebook ad by its ID. Change the ad name and/or status (ACTIVE, PAUSED, ARCHIVED). Only provided fields are modified. The userId is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {
           userId: {
             type: 'string',
-            description: 'The user ID (Supabase auth) to retrieve the Facebook token.'
+            description: 'The authenticated user ID (auto-filled from server workspace if not provided).'
           },
           ad_id: {
             type: 'string',

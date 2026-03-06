@@ -303,7 +303,7 @@ const apiTool = {
     function: {
       name: 'create_ad_set_traffic',
       description:
-        'Create a Facebook ad set for TRAFFIC campaigns with conversion-location-aware validation.',
+        'Create a Facebook ad set for TRAFFIC campaigns. Supports conversion locations (WEBSITE, APP, MESSAGING, CALLS, INSTAGRAM_PROFILE) with validation of required fields per location. Optimizes for link clicks or landing page views with customizable targeting, budgets, scheduling, and bid strategy. The account_id and page_id are auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {

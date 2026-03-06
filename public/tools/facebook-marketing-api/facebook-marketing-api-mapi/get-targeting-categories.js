@@ -51,7 +51,7 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'get_targeting_categories',
-      description: 'Get targeting categories from the Facebook Marketing API.',
+      description: 'Retrieve available targeting categories for a Facebook Ad Account, including interests, behaviors, demographics, and life events. Use these categories when building ad set targeting specs. The account_id is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {

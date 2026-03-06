@@ -2,7 +2,7 @@
  * Function to get report insights from the Facebook Marketing API.
  *
  * @param {Object} args - Arguments for the request.
- * @param {string} args.userId - The user ID (Supabase auth) to retrieve the Facebook token.
+ * @param {string} args.userId - The authenticated user ID.
  * @param {string} args.report_id_breakdowns - The report ID for which to get insights.
  * @returns {Promise<Object>} - The insights data for the specified report ID.
  */
@@ -43,13 +43,13 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'get_report_insights',
-      description: 'Get insights for a specific report ID from the Facebook Marketing API.',
+      description: 'Fetch the results of a previously generated async report by its report ID. Returns the breakdown data (e.g., by age, gender, country) that was requested when the report was created with generate_report_breakdown. The userId is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {
           userId: {
             type: 'string',
-            description: 'The user ID (Supabase auth) to retrieve the Facebook token.'
+            description: 'The authenticated user ID (auto-filled from server workspace if not provided).'
           },
           report_id_breakdowns: {
             type: 'string',

@@ -51,7 +51,7 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'get_adsets_list',
-      description: 'Get a list of ad sets from the specified ad account.',
+      description: 'List all ad sets in a Facebook Ad Account with details: name, status, budget (daily/lifetime), optimization goal, targeting summary, schedule, and associated campaign. Supports filtering by status. The account_id is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {

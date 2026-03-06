@@ -60,7 +60,7 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'get_attribution_insights',
-      description: 'Fetch insights with attribution windows for a Facebook Ad Account. Returns performance data with configurable attribution models.',
+      description: 'Fetch performance insights with custom attribution windows for a Facebook Ad Account. Configure click-through and view-through attribution windows (1d, 7d, 28d) to measure conversion impact across different timeframes. Returns spend, impressions, clicks, conversions, and action values. The account_id is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {

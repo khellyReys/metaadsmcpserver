@@ -3,7 +3,7 @@
  *
  * @param {Object} args - Arguments for the request.
  * @param {string} args.pixel_id - The ID of the pixel for which to retrieve statistics.
- * @param {string} args.userId - The user ID to retrieve the Facebook token from Supabase.
+ * @param {string} args.userId - The authenticated user ID.
  * @param {string} [args.base_url] - The base URL for the Facebook Graph API (optional).
  * @returns {Promise<Object>} - The statistics for the specified Ads Pixel.
  */
@@ -36,7 +36,7 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'get_pixel_stats',
-      description: 'Retrieve statistics for a specified Ads Pixel.',
+      description: 'Retrieve event statistics for a Facebook Pixel by its ID, including total events fired, event breakdown by type (PageView, Purchase, Lead, etc.), last fired time, and data processing status. The userId is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {
@@ -46,7 +46,7 @@ const apiTool = {
           },
           userId: {
             type: 'string',
-            description: 'The user ID (Supabase auth) to retrieve the Facebook token.'
+            description: 'The authenticated user ID (auto-filled from server workspace if not provided).'
           },
           base_url: {
             type: 'string',

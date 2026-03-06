@@ -66,13 +66,13 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'update_campaign',
-      description: 'Update a Facebook campaign. Supports changing name, status, budget, bid strategy, and end time.',
+      description: 'Update an existing Facebook campaign by its ID. Supports changing the campaign name, status (ACTIVE, PAUSED, ARCHIVED), daily or lifetime budget, bid strategy (LOWEST_COST_WITHOUT_CAP, LOWEST_COST_WITH_BID_CAP, COST_CAP), and end time. Only provided fields are updated. The userId is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {
           userId: {
             type: 'string',
-            description: 'The user ID (Supabase auth) to retrieve the Facebook token.'
+            description: 'The authenticated user ID (auto-filled from server workspace if not provided).'
           },
           campaign_id: {
             type: 'string',

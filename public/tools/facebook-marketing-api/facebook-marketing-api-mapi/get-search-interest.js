@@ -43,13 +43,13 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'get_search_interest',
-      description: 'Search for interests, locations, demographics, and other targeting options on the Facebook Marketing API. Use the results for ad set detailed targeting.',
+      description: 'Search Facebook targeting options by keyword query. Returns matching interests, behaviors, demographics, employers, job titles, and locations with audience size estimates. Use the returned IDs in ad set flexible_spec targeting. The userId is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {
           userId: {
             type: 'string',
-            description: 'The user ID (Supabase auth) to retrieve the Facebook token.'
+            description: 'The authenticated user ID (auto-filled from server workspace if not provided).'
           },
           type: {
             type: 'string',

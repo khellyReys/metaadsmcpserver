@@ -653,7 +653,7 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'create_ad_set',
-      description: 'Create a Facebook ad set with dynamic optimization based on campaign objective. Select campaign_objective first to see relevant parameters for that objective type.',
+      description: 'Create a Facebook ad set with dynamic parameter validation based on campaign objective. Automatically configures optimization goal, billing event, and promoted object fields for the selected objective (AWARENESS, TRAFFIC, ENGAGEMENT, LEADS, SALES, APP_PROMOTION). Supports targeting, budgets, scheduling, bid strategy, and placement controls. The account_id and page_id are auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: getParametersForObjective('OUTCOME_AWARENESS'), // Default to show awareness parameters

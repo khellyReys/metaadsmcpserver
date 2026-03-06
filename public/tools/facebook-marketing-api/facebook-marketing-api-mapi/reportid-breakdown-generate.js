@@ -61,7 +61,7 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'generate_report_breakdown',
-      description: 'Generate an async report breakdown for Facebook Ads with configurable fields, breakdowns, and attribution windows.',
+      description: 'Generate an asynchronous report breakdown for a Facebook Ad Account. Configure metrics fields (spend, impressions, conversions, etc.), breakdowns (age, gender, country, device, placement), date ranges, and attribution windows. Returns a report_run_id to poll with get_report_insights. The account_id is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {

@@ -39,7 +39,7 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'get_reach_frequency_predictions',
-      description: 'Get reach frequency predictions for a specific ad account from the Facebook Marketing API.',
+      description: 'Generate reach and frequency predictions for a Facebook Ad Account. Estimates audience reach, impression distribution, and cost projections for planned campaigns. The account_id is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {

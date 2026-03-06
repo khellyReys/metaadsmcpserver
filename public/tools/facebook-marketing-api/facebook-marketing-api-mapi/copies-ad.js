@@ -1,5 +1,5 @@
 /**
- * Copy an ad in the Facebook Marketing API.
+ * Duplicate an existing Facebook ad by its ID. Creates a copy with the same creative, targeting, and settings. Supports setting the copied ad status (ACTIVE, PAUSED, ARCHIVED) and rename options. The userId is auto-filled from server workspace if not provided.
  */
 import { getSupabaseClient, getTokenForUser } from './_token-utils.js';
 import { getBaseUrl, safeFacebookError } from './_shared-helpers.js';
@@ -37,13 +37,13 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'copy_ad',
-      description: 'Copy an ad in the Facebook Marketing API.',
+      description: 'Duplicate an existing Facebook ad by its ID. Creates a copy with the same creative, targeting, and settings. Supports setting the copied ad status (ACTIVE, PAUSED, ARCHIVED) and rename options. The userId is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {
           userId: {
             type: 'string',
-            description: 'The user ID (Supabase auth) to retrieve the Facebook token.'
+            description: 'The authenticated user ID (auto-filled from server workspace if not provided).'
           },
           ad_id: {
             type: 'string',

@@ -52,7 +52,7 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'get_advertisable_applications',
-      description: 'Fetches advertisable applications for a given ad account.',
+      description: 'Retrieve mobile and web applications available for advertising under a Facebook Ad Account. Returns app IDs, names, and platforms. Use the returned IDs for app promotion campaigns. The account_id is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {

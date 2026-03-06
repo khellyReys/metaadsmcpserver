@@ -348,12 +348,12 @@ const apiTool = {
   function: executeFunction,
   definition: {
     name: 'create_ad_creative',
-    description: 'Create Facebook Ad Creative - either boost existing page posts or create new photo/video posts. Supports both strategies with comprehensive error handling.',
+    description: 'Create a Facebook Ad Creative using one of two strategies: boost an existing page post (by post_id or object_story_id) or create a new photo/video post with image_url, video_id, headline, body text, link, and call-to-action. Validates post existence before boosting. Returns the created creative ID. The account_id and page_id are auto-filled from server workspace if not provided.',
     inputSchema: INPUT_SCHEMA,
     type: 'function',
     function: {
       name: 'create_ad_creative',
-      description: 'Create Facebook Ad Creative - either boost existing page posts or create new photo/video posts. Supports both strategies with comprehensive error handling.',
+      description: 'Create a Facebook Ad Creative using one of two strategies: boost an existing page post (by post_id or object_story_id) or create a new photo/video post with image_url, video_id, headline, body text, link, and call-to-action. Validates post existence before boosting. Returns the created creative ID. The account_id and page_id are auto-filled from server workspace if not provided.',
       parameters: INPUT_SCHEMA
     }
   }

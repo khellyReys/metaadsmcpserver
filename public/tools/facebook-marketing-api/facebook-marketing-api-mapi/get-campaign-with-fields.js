@@ -2,7 +2,7 @@
  * Function to get campaign details from the Facebook Marketing API.
  *
  * @param {Object} args - Arguments for the campaign retrieval.
- * @param {string} args.userId - The user ID (Supabase auth) to retrieve the Facebook token.
+ * @param {string} args.userId - The authenticated user ID.
  * @param {string} args.campaign_id - The ID of the campaign to retrieve.
  * @returns {Promise<Object>} - The details of the campaign.
  */
@@ -45,13 +45,13 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'get_campaign_with_fields',
-      description: 'Get details of a specific campaign from the Facebook Marketing API.',
+      description: 'Retrieve detailed fields for a single Facebook campaign by its ID, including objective, status, budget, bid strategy, spend cap, buying type, special ad categories, and timestamps. The userId is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {
           userId: {
             type: 'string',
-            description: 'The user ID (Supabase auth) to retrieve the Facebook token.'
+            description: 'The authenticated user ID (auto-filled from server workspace if not provided).'
           },
           campaign_id: {
             type: 'string',

@@ -3,7 +3,7 @@
  *
  * @param {Object} args - Arguments for the request.
  * @param {string} args.adCreativeId - The ID of the ad creative to retrieve details for.
- * @param {string} args.userId - The user ID to retrieve the Facebook token from Supabase.
+ * @param {string} args.userId - The authenticated user ID.
  * @param {string} [args.base_url] - The base URL for the Facebook Graph API (optional).
  * @returns {Promise<Object>} - The details of the ad creative.
  */
@@ -36,7 +36,7 @@ const apiTool = {
     type: 'function',
     function: {
       name: 'get_creative_details',
-      description: 'Retrieve details of a specific ad creative.',
+      description: 'Retrieve full details of a single ad creative by its ID, including object story spec, image/video assets, call-to-action configuration, link data, and associated page. The userId is auto-filled from server workspace if not provided.',
       parameters: {
         type: 'object',
         properties: {
@@ -46,7 +46,7 @@ const apiTool = {
           },
           userId: {
             type: 'string',
-            description: 'The user ID (Supabase auth) to retrieve the Facebook token.'
+            description: 'The authenticated user ID (auto-filled from server workspace if not provided).'
           },
           base_url: {
             type: 'string',
